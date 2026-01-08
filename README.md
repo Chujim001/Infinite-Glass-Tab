@@ -4,3 +4,4 @@
 本起始页提供详细注释，方便初学者学习及调试，
 本起始页纯属离线页面而且只有一个html文件，可以直接导入浏览器使用，不需要部署任何服务器，
 作者支持您随意修改代码魔改此页面以供您更好的使用。
+<img width="1871" height="994" alt="image" src="https://github.com/user-attachments/assets/2f4e3b95-30b4-462b-9170-245611d58915" />
