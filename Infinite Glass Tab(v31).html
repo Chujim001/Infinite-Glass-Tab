@@ -1,0 +1,2718 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <!-- 设置视口，确保在移动设备上正确缩放 -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>Infinite Glass Tab(v31)</title>
+  <style>
+    /* ========== CSS变量定义 ========== */
+    /* 定义可重用的CSS变量，方便全局管理和维护 */
+    :root {
+      --glass-bg: rgba(255, 255, 255, 0.15); /* 毛玻璃背景颜色 */
+      --glass-border: rgba(255, 255, 255, 0.25); /* 毛玻璃边框颜色 */
+      --text-light: rgba(255, 255, 255, 0.95); /* 亮色文字 */
+      --text-dim: rgba(255, 255, 255, 0.7); /* 暗色文字 */
+      --primary-color: #4f46e5; /* 主色调 */
+      --transition-ease: cubic-bezier(0.4, 0, 0.2, 1); /* 缓动过渡函数 */
+      --ios-safe-area-inset-bottom: env(safe-area-inset-bottom, 0px);
+      --ios-safe-area-inset-top: env(safe-area-inset-top, 0px);
+    }
+
+    /* ========== 全局重置和基础样式 ========== */
+    /* 重置所有元素的外边距、内边距，使用border-box盒模型 */
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box; /* border-box盒模型：宽度包含border和padding */
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', sans-serif; /* 字体栈 */
+      -webkit-font-smoothing: antialiased; /* 字体抗锯齿 */
+      -moz-osx-font-smoothing: grayscale; /* Firefox字体平滑 */
+      text-rendering: optimizeLegibility; /* 文本渲染优化 */
+      /* ========== 优化点1：删除所有image-rendering设置，让浏览器使用默认算法 ========== */
+      /* 注释掉以下两行，避免强制渲染模式导致高清图片锯齿 */
+      /* image-rendering: -webkit-optimize-contrast; !* 图片渲染优化 *! */
+      /* image-rendering: crisp-edges; !* 图片边缘清晰 *! */
+      backface-visibility: hidden; /* GPU加速优化 */
+    }
+
+    /* 页面主体样式 - 修复键盘弹出问题 */
+    html, body {
+      height: 100%; /* html和body都设置100%高度 */
+      width: 100%;
+      overflow-x: hidden; /* 隐藏水平溢出 */
+    }
+
+    body {
+      position: relative; /* 改为相对定位 */
+      display: flex; /* 使用弹性布局 */
+      flex-direction: column; /* 垂直方向排列 */
+      justify-content: center; /* 垂直居中 */
+      align-items: center; /* 水平居中 */
+      padding: 20px; /* 内边距 */
+      overflow-x: hidden; /* 隐藏水平溢出 */
+      transition: padding 1s var(--transition-ease); /* 内边距过渡动画 */
+      transform: translateZ(0); /* GPU加速 */
+      min-height: 100%; /* 使用百分比而不是vh */
+      /*第二批注释will-change: padding;*/ /* 预知padding变化 */
+    }
+
+    /* 创建一个固定容器来包裹所有内容 */
+    .page-container {
+      width: 100%;
+      max-width: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      flex: 1;
+    }
+
+    /* ========== 背景容器和模糊效果 ========== */
+    /* 背景容器：固定定位，覆盖整个视口 */
+    #background-container {
+      position: fixed; /* 固定定位，不随页面滚动 */
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: -2; /* 置于最底层 */
+      overflow: hidden; /* 隐藏溢出 */
+      transition: filter 0.6s var(--transition-ease); /* 滤镜过渡动画 */
+      transform: translateZ(0); /* GPU加速 */
+      /*第二批注释will-change: filter, transform;*/ /* 预知filter和transform变化 */
+      -webkit-backface-visibility: hidden; /* Safari GPU加速 */
+      -webkit-transform-style: preserve-3d; /* 3D变换 */
+      contain: layout paint style; /* 包含策略优化 */
+      isolation: isolate; /* 创建新的层叠上下文 */
+    }
+
+    /* 添加模糊效果的背景容器 */
+    #background-container.blurred {
+      filter: blur(20px) saturate(180%); /* 20px模糊，180%饱和度增强 */
+      transform: translateZ(0); /* 强制GPU加速 */
+      transition: filter 0.6s var(--transition-ease);
+    }
+
+    /* 背景图片和默认背景样式 */
+    #background-image,
+    .default-background {
+      width: 100%;
+      height: 100%;
+      object-fit: cover; /* 图片覆盖整个容器，保持比例 */
+      transition: inherit; /* 继承父元素的过渡效果 */
+      /* ========== 优化点2：移除背景图片的translateZ(0)，避免GPU合成层影响渲染质量 ========== */
+      /* 注释掉以下transform设置，让图片以原生方式渲染 */
+      /* transform: translateZ(0); !* GPU加速 *! */
+      /*第二批注释will-change: transform; !* 预知transform变化 *!*/
+      -webkit-transform: translateZ(0); /* Safari GPU加速 */
+      backface-visibility: hidden; /* 隐藏背面 */
+      /* ========== 优化点1扩展：同时删除背景图片的image-rendering设置 ========== */
+      /* 注释掉以下两行，让浏览器决定最佳渲染方式 */
+      /* image-rendering: -webkit-optimize-contrast; !* 图片渲染优化 *! */
+      /* image-rendering: crisp-edges; !* 图片边缘清晰 *! */
+      contain: layout paint; /* 包含策略优化 */
+    }
+
+    /* 默认背景：渐变背景 */
+    .default-background {
+      background: linear-gradient(135deg, #0f2027, #203a43, #2c5364); /* 135度渐变 */
+      transform: translate3d(0, 0, 0); /* 3D变换GPU加速 */
+    }
+
+    /* ========== 优化点3：添加Retina屏优化 - 高DPI设备专用渲染优化 ========== */
+    /* 针对Retina/高DPI显示屏的特殊优化，确保高清图片渲染质量 */
+    @media (-webkit-min-device-pixel-ratio: 2),
+    (min-resolution: 192dpi),
+    (min-resolution: 2dppx) {
+      #background-image {
+        /* 启用高质量图像渲染模式，确保高清图片平滑显示 */
+        image-rendering: auto; /* 让浏览器选择最佳渲染算法 */
+        /* 极轻微的平滑处理，用于消除高对比度边缘的锯齿 */
+        -webkit-backface-visibility: hidden; /* 确保背面隐藏，优化渲染性能 */
+        backface-visibility: hidden; /* 标准属性，防止渲染背面 */
+        /* 保持高质量过滤，避免像素化 */
+        -webkit-font-smoothing: subpixel-antialiased; /* 子像素抗锯齿 */
+        -moz-osx-font-smoothing: grayscale; /* 灰度抗锯齿 */
+      }
+    }
+
+    /* ========== 控制按钮容器 ========== */
+    /* 控制按钮容器：固定在左上角 */
+    .control-buttons {
+      position: fixed; /* 固定定位 */
+      top: 25px;
+      left: 25px;
+      z-index: 1000; /* 较高的z-index，确保在最上层 */
+      display: flex;
+      flex-direction: column; /* 垂直排列 */
+      gap: 12px; /* 子元素间距 */
+      align-items: flex-start; /* 左对齐 */
+      transition: all 0.5s var(--transition-ease); /* 所有属性过渡动画 */
+      transform: translateZ(0); /* GPU加速 */
+      /*will-change: transform; !* 预知transform变化 *!*/
+      /*contain: layout paint;*/ /* 包含策略优化 */
+      -webkit-transform: translateZ(0); /* Safari GPU加速 */
+    }
+
+    /* 搜索框聚焦时隐藏控制按钮 */
+    body.search-focused .control-buttons {
+      transform: translateX(-120%) translateZ(0); /* 向左移出屏幕，GPU加速 */
+      opacity: 1;
+      pointer-events: none; /* 禁用鼠标事件 */
+    }
+
+    /* ========== 网络状态指示器 ========== */
+    /* 网络状态指示器：圆形按钮 */
+    .network-indicator {
+      width: 52px;
+      height: 52px;
+      border-radius: 50%; /* 圆形 */
+      background: var(--glass-bg); /* 毛玻璃背景 */
+      backdrop-filter: blur(12px) saturate(180%); /* 背景模糊和饱和 */
+      -webkit-backdrop-filter: blur(12px) saturate(180%); /* Safari兼容 */
+      border: 1px solid var(--glass-border); /* 边框 */
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer; /* 鼠标手型 */
+      transition: all 0.3s var(--transition-ease); /* 所有属性过渡 */
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15); /* 阴影 */
+      overflow: hidden; /* 隐藏溢出 */
+      flex-shrink: 0; /* 防止缩小 */
+      transform: translateZ(0); /* GPU加速 */
+      /*will-change: transform, width, background, box-shadow; !* 预知属性变化 *!*/
+      contain: layout paint; /* 包含策略优化 */
+      -webkit-transform: translateZ(0); /* Safari GPU加速 */
+    }
+
+    /* 悬停时展开为胶囊形状 */
+    .network-indicator:hover {
+      background: rgba(255, 255, 255, 0.22); /* 更亮的背景 */
+      transform: translateY(-2px) translateZ(0); /* 向上移动2px，GPU加速 */
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.25); /* 更强的阴影 */
+      width: auto; /* 宽度自适应 */
+      min-width: 52px; /* 最小宽度保持圆形 */
+      padding: 0 20px; /* 水平内边距 */
+      border-radius: 1000px; /* 胶囊形状 */
+    }
+
+    /* 悬停时显示工具提示 */
+    .network-indicator:hover .network-tooltip {
+      opacity: 1; /* 显示 */
+      transform: translateX(0) translateZ(0); /* 位置复位，GPU加速 */
+      margin-left: 12px; /* 左边距 */
+      max-width: 250px; /* 最大宽度 */
+    }
+
+    /* 网络状态图标 */
+    .network-icon {
+      width: 24px;
+      height: 24px;
+      transition: all 0.3s ease; /* 过渡动画 */
+      flex-shrink: 0; /* 防止缩小 */
+      transform: translateZ(0); /* GPU加速 */
+      /*第二批注释will-change: transform, fill, filter;*/ /* 预知属性变化 */
+    }
+
+    /* 网络状态工具提示 */
+    .network-tooltip {
+      opacity: 0; /* 默认隐藏 */
+      transform: translateX(-10px) translateZ(0); /* 向左偏移10px，GPU加速 */
+      transition: all 0.3s var(--transition-ease); /* 过渡动画 */
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text-light); /* 文字颜色 */
+      white-space: nowrap; /* 不换行 */
+      pointer-events: none; /* 禁用鼠标事件 */
+      max-width: 0; /* 初始宽度为0 */
+      overflow: hidden; /* 隐藏溢出 */
+      /*will-change: transform, opacity, max-width; !* 预知属性变化 *!*/
+      backface-visibility: hidden; /* 隐藏背面 */
+    }
+
+    /* 不同网络状态的图标颜色 */
+    .network-indicator.online .network-icon {
+      fill: #4ade80; /* 在线：绿色 */
+      filter: drop-shadow(0 0 8px rgba(74, 222, 128, 0.4)); /* 发光效果 */
+      transform: translateZ(0); /* GPU加速 */
+    }
+
+    .network-indicator.offline .network-icon {
+      fill: #f87171; /* 离线：红色 */
+      filter: drop-shadow(0 0 8px rgba(248, 113, 113, 0.4)); /* 发光效果 */
+      transform: translateZ(0); /* GPU加速 */
+    }
+
+    .network-indicator.warning .network-icon {
+      fill: #fbbf24; /* 警告：黄色 */
+      filter: drop-shadow(0 0 8px rgba(251, 191, 36, 0.4)); /* 发光效果 */
+      transform: translateZ(0); /* GPU加速 */
+    }
+
+    .network-indicator.checking .network-icon {
+      fill: #60a5fa; /* 检测中：蓝色 */
+      animation: pulse 1.5s infinite; /* 脉冲动画 */
+      transform: translateZ(0); /* GPU加速 */
+    }
+
+    /* 脉冲动画关键帧 */
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: translateZ(0); } /* GPU加速 */
+      50% { opacity: 0.5; transform: translateZ(0); } /* GPU加速 */
+    }
+
+    /* ========== 自定义背景按钮 ========== */
+    /* 自定义背景按钮样式 */
+    #bg-upload-btn {
+      background: var(--glass-bg);
+      backdrop-filter: blur(12px) saturate(180%);
+      -webkit-backdrop-filter: blur(12px) saturate(180%);
+      border: 1px solid var(--glass-border);
+      color: var(--text-light);
+      border-radius: 50px; /* 胶囊形状 */
+      padding: 14px 24px; /* 内边距 */
+      font-size: 15px; /* 字体大小 */
+      cursor: pointer; /* 鼠标手型 */
+      display: flex;
+      align-items: center;
+      gap: 10px; /* 图标和文字间距 */
+      transition: all 0.3s var(--transition-ease); /* 过渡动画 */
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2); /* 阴影 */
+      height: 52px; /* 固定高度 */
+      line-height: 24px; /* 行高，确保文字垂直居中 */
+      width: auto;
+      min-width: 160px; /* 最小宽度 */
+      transform: translateZ(0); /* GPU加速 */
+      /*will-change: transform, background, box-shadow; !* 预知属性变化 *!*/
+      contain: layout paint; /* 包含策略优化 */
+      -webkit-transform: translateZ(0); /* Safari GPU加速 */
+    }
+
+    /* 按钮悬停效果 */
+    #bg-upload-btn:hover {
+      background: rgba(255, 255, 255, 0.22); /* 更亮的背景 */
+      transform: translateY(-2px) translateZ(0); /* 向上移动，GPU加速 */
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25); /* 更强的阴影 */
+    }
+
+    /* 隐藏文件输入框 */
+    #bg-file-input {
+      display: none; /* 隐藏但功能正常 */
+    }
+
+    /* ========== 搜索引擎切换容器 ========== */
+    /* 搜索引擎选择器容器 */
+    .engine-selector {
+      display: flex;
+      justify-content: center; /* 水平居中 */
+      gap: 14px; /* 按钮间距 */
+      margin-bottom: 35px; /* 底部外边距 */
+      flex-wrap: wrap; /* 允许换行 */
+      width: 100%;
+      max-width: 700px; /* 最大宽度 */
+      transition: all 1s var(--transition-ease); /* 过渡动画 */
+      position: relative;
+      z-index: 20; /* 层级 */
+      transform: translateZ(0); /* GPU加速 */
+      /*will-change: transform; !* 预知transform变化 *!*/
+      contain: layout; /* 包含策略优化 */
+    }
+
+    /* 搜索框聚焦时，搜索引擎按钮上移 */
+    body.search-focused .engine-selector {
+      transform: translateY(-250px) translateZ(0); /* 上移250px，GPU加速 */
+    }
+
+    /* 搜索引擎按钮样式 */
+    .engine-btn {
+      background: var(--glass-bg);
+      backdrop-filter: blur(12px) saturate(180%);
+      -webkit-backdrop-filter: blur(12px) saturate(180%);
+      border: 1px solid var(--glass-border);
+      color: var(--text-light);
+      padding: 13px 26px; /* 内边距 */
+      border-radius: 50px; /* 胶囊形状 */
+      cursor: pointer; /* 鼠标手型 */
+      font-size: 16px;
+      font-weight: 500;
+      transition: all 0.3s var(--transition-ease); /* 过渡动画 */
+      display: flex;
+      align-items: center;
+      gap: 10px; /* 图标和文字间距 */
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15); /* 阴影 */
+      transform: translateZ(0); /* GPU加速 */
+      /*will-change: transform, background, box-shadow; !* 预知属性变化 *!*/
+      contain: layout paint; /* 包含策略优化 */
+      -webkit-transform: translateZ(0); /* Safari GPU加速 */
+    }
+
+    /* 按钮悬停效果 */
+    .engine-btn:hover {
+      background: rgba(255, 255, 255, 0.22); /* 更亮的背景 */
+      transform: translateY(-2px) translateZ(0); /* 向上移动，GPU加速 */
+    }
+
+    /* 活动状态按钮 */
+    .engine-btn.active {
+      background: rgba(255, 255, 255, 0.28); /* 更亮的背景 */
+      border-color: rgba(255, 255, 255, 0.4); /* 更亮的边框 */
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25); /* 更强的阴影 */
+    }
+
+    /* 搜索引擎图标 */
+    .engine-icon {
+      width: 20px;
+      height: 20px;
+      flex-shrink: 0; /* 防止缩小 */
+      transform: translateZ(0); /* GPU加速 */
+      /*will-change: transform; !* 预知transform变化 *!*/
+    }
+
+    /* 搜索引擎按钮文字部分 - 非iOS设备微调 */
+    .engine-btn-text {
+      position: relative;
+      top: -1.3px; /* 向上微调1.3px，与图标对齐 */
+      transform: translateZ(0); /* GPU加速 */
+    }
+
+    /* iOS设备：文字不偏移 */
+    @supports (-webkit-touch-callout: none) {
+      .engine-btn-text {
+        top: 0px; /* iOS设备不偏移 */
+      }
+    }
+
+    /* ========== 搜索容器和输入框 ========== */
+    /* 搜索包装器 */
+    .search-wrapper {
+      width: 100%;
+      max-width: 700px; /* 最大宽度 */
+      position: relative; /* 相对定位，为子元素绝对定位提供参考 */
+      transition: all 0.5s var(--transition-ease); /* 过渡动画 */
+      margin-top: 0;
+      transform: translateZ(0); /* GPU加速 */
+      /*will-change: transform; !* 预知transform变化 *!*/
+      /*contain: layout paint;*/ /* 包含策略优化 */
+      -webkit-transform: translateZ(0); /* Safari GPU加速 */
+    }
+
+    /* 搜索框聚焦时上移和放大 */
+    body.search-focused .search-wrapper {
+      transform: translateY(-250px) scale(1.1) translateZ(0); /* 上移250px并放大1.1倍，GPU加速 */
+    }
+
+    .search-wrapper.focused {
+      transform: translateY(-60px) scale(1.1) translateZ(0); /* 上移60px并放大1.1倍，GPU加速 */
+    }
+
+    /* 胶囊形状搜索输入框 */
+    #search-input {
+      width: 100%;
+      padding: 24px 70px 24px 28px; /* 内边距，右侧留出按钮空间 */
+      font-size: 18px;
+      border: none; /* 无边框 */
+      border-radius: 50px; /* 胶囊形状 */
+      background: var(--glass-bg); /* 毛玻璃背景 */
+      backdrop-filter: blur(20px) saturate(180%); /* 背景模糊和饱和 */
+      -webkit-backdrop-filter: blur(20px) saturate(180%); /* Safari兼容 */
+      color: var(--text-light); /* 文字颜色 */
+      outline: none; /* 移除焦点轮廓 */
+      transition: all 0.5s var(--transition-ease); /* 过渡动画 */
+      box-shadow: 0 15px 35px rgba(0, 0, 0, 0.25); /* 阴影 */
+      border: 1px solid var(--glass-border); /* 边框 */
+      position: relative;
+      z-index: 10; /* 层级 */
+      height: 68px; /* 固定高度 */
+      transform: translateZ(0); /* GPU加速 */
+      /*will-change: transform, background, box-shadow; !* 预知属性变化 *!*/
+      /*contain: layout paint;*/ /* 包含策略优化 */
+      -webkit-transform: translateZ(0); /* Safari GPU加速 */
+    }
+
+    /* 输入框占位符样式 */
+    #search-input::placeholder {
+      color: var(--text-dim); /* 暗色占位符 */
+    }
+
+    /* 圆形搜索按钮 */
+    #search-btn {
+      position: absolute; /* 绝对定位 */
+      right: 8px; /* 距离右侧8px */
+      top: 50%; /* 垂直居中 */
+      transform: translateY(-50%) translateZ(0); /* 垂直居中，GPU加速 */
+      background: rgba(255, 255, 255, 0.22); /* 半透明白色背景 */
+      backdrop-filter: blur(20px) saturate(180%); /* 背景模糊和饱和 */
+      -webkit-backdrop-filter: blur(20px) saturate(180%); /* Safari兼容 */
+      border: 1px solid rgba(255, 255, 255, 0.3); /* 边框 */
+      border-radius: 50%; /* 圆形 */
+      width: 52px; /* 宽度 */
+      height: 52px; /* 高度 */
+      color: white; /* 图标颜色 */
+      cursor: pointer; /* 鼠标手型 */
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      transition: all 0.4s var(--transition-ease); /* 过渡动画 */
+      z-index: 11; /* 层级高于输入框 */
+      box-shadow: 0 8px 20px rgba(0, 0, 0, 0.2); /* 阴影 */
+      overflow: hidden; /* 隐藏溢出 */
+      /*will-change: transform, width, height, background, box-shadow; !* 预知属性变化 *!*/
+      contain: layout paint; /* 包含策略优化 */
+      -webkit-transform: translateY(-50%) translateZ(0); /* Safari GPU加速 */
+    }
+
+    /* 搜索框聚焦时按钮样式 */
+    /*.search-wrapper.focused #search-btn {
+      width: 56px; !* 稍大 *!
+      height: 56px; !* 稍大 *!
+      border-radius: 50%; !* 保持圆形 *!
+      right: 6px; !* 调整位置 *!
+      transform: translateY(-50%) translateZ(0); !* 保持垂直居中，GPU加速 *!
+      background: rgba(255, 255, 255, 0.28); !* 更亮的背景 *!
+      box-shadow: 0 12px 28px rgba(0, 0, 0, 0.3); !* 更强的阴影 *!
+    }*/
+
+    /* 按钮悬停效果 */
+    #search-btn:hover {
+      background: rgba(255, 255, 255, 0.32); /* 更亮的背景 */
+      transform: translateY(-50%) scale(1.08) translateZ(0); /* 放大1.08倍，GPU加速 */
+    }
+
+    /* ========== 搜索建议容器 ========== */
+    /* 搜索建议容器 */
+    #suggestions {
+      position: absolute; /* 绝对定位 */
+      top: calc(100% + 14px); /* 在搜索框下方14px处 */
+      left: 0;
+      right: 0;
+      background: rgba(40, 40, 40, 0.7); /* 深色半透明背景 */
+      backdrop-filter: blur(30px) saturate(200%); /* 背景模糊和饱和 */
+      -webkit-backdrop-filter: blur(30px) saturate(200%); /* Safari兼容 */
+      border-radius: 22px; /* 圆角 */
+      overflow: hidden; /* 隐藏溢出 */
+      z-index: 100; /* 较高层级 */
+      max-height: 0; /* 初始高度为0 */
+      opacity: 0; /* 初始透明度为0 */
+      visibility: hidden; /* 初始不可见 */
+      transition: all 0.45s var(--transition-ease); /* 过渡动画 */
+      border: 1px solid rgba(255, 255, 255, 0.18); /* 边框 */
+      box-shadow: 0 25px 60px rgba(0, 0, 0, 0.35); /* 阴影 */
+      overscroll-behavior: contain; /* 防止滚动连锁 */
+      -webkit-overflow-scrolling: touch; /* iOS平滑滚动 */
+      display: flex;
+      flex-direction: column; /* 垂直排列 */
+      max-height: 0; /* 初始高度为0 */
+      transform: translateZ(0); /* GPU加速 */
+      /*will-change: transform, opacity, max-height; !* 预知属性变化 *!*/
+      contain: layout paint; /* 包含策略优化 */
+      -webkit-transform: translateZ(0); /* Safari GPU加速 */
+    }
+
+    /* 显示搜索建议 */
+    #suggestions.show {
+      opacity: 1; /* 显示 */
+      visibility: visible; /* 可见 */
+      max-height: min(460px, calc(100vh - 200px)); /* 动态计算最大高度 */
+      transform: translateZ(0); /* GPU加速 */
+    }
+
+    /* ========== 响应式设计 ========== */
+    /* 中等高度屏幕优化 */
+    @media (max-height: 700px) {
+      #suggestions.show {
+        max-height: min(400px, calc(100vh - 180px)); /* 调整最大高度 */
+      }
+    }
+
+    /* 较小高度屏幕优化 */
+    @media (max-height: 600px) {
+      #suggestions.show {
+        max-height: min(350px, calc(100vh - 150px)); /* 调整最大高度 */
+      }
+    }
+
+    /* 最小高度屏幕优化 */
+    @media (max-height: 500px) {
+      #suggestions.show {
+        max-height: min(300px, calc(100vh - 130px)); /* 调整最大高度 */
+      }
+    }
+
+    /* iOS设备特殊优化 */
+    @supports (-webkit-touch-callout: none) {
+      #suggestions.show {
+        max-height: min(400px, calc(100vh - 220px)); /* iOS键盘弹出时的高度 */
+      }
+
+      @media (max-height: 700px) {
+        #suggestions.show {
+          max-height: min(350px, calc(100vh - 200px)); /* 调整高度 */
+        }
+      }
+
+      @media (max-height: 600px) {
+        #suggestions.show {
+          max-height: min(300px, calc(100vh - 180px)); /* 调整高度 */
+        }
+      }
+
+      @media (max-height: 500px) {
+        #suggestions.show {
+          max-height: min(250px, calc(100vh - 160px)); /* 调整高度 */
+        }
+      }
+    }
+
+    /* 建议内容区域 */
+    #suggestions-content {
+      flex: 1; /* 填充剩余空间 */
+      overflow-y: auto; /* 垂直滚动 */
+      overscroll-behavior: contain; /* 防止滚动连锁 */
+      -webkit-overflow-scrolling: touch; /* iOS平滑滚动 */
+      padding: 4px 0; /* 垂直内边距 */
+      transform: translateZ(0); /* GPU加速 */
+      /*will-change: transform; !* 预知transform变化 *!*/
+      contain: layout paint; /* 包含策略优化 */
+      -webkit-transform: translateZ(0); /* Safari GPU加速 */
+    }
+
+    /* 自定义滚动条样式 */
+    #suggestions-content::-webkit-scrollbar {
+      width: 6px; /* 滚动条宽度 */
+    }
+
+    #suggestions-content::-webkit-scrollbar-track {
+      background: rgba(255, 255, 255, 0.05); /* 轨道颜色 */
+      border-radius: 3px; /* 圆角 */
+    }
+
+    #suggestions-content::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.2); /* 滑块颜色 */
+      border-radius: 3px; /* 圆角 */
+    }
+
+    #suggestions-content::-webkit-scrollbar-thumb:hover {
+      background: rgba(255, 255, 255, 0.3); /* 悬停时滑块颜色 */
+    }
+
+    /* ========== 搜索建议项 ========== */
+    /* 单个搜索建议项 */
+    .suggestion-item {
+      padding: 17px 24px; /* 内边距 */
+      cursor: pointer; /* 鼠标手型 */
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08); /* 底部边框 */
+      transition: all 0.25s ease; /* 过渡动画 */
+      display: flex;
+      align-items: center;
+      gap: 14px; /* 图标和文字间距 */
+      position: relative;
+      overflow: hidden;
+      isolation: isolate; /* 创建新的堆叠上下文 */
+      touch-action: manipulation; /* 优化触摸操作 */
+      user-select: none; /* 禁止文本选择 */
+      -webkit-tap-highlight-color: transparent; /* 移除点击高亮 */
+      min-height: 56px; /* 最小高度 */
+      transform: translateZ(0); /* GPU加速 */
+      /*will-change: transform, background-color;*/ /* 预知属性变化 */
+      contain: layout paint; /* 包含策略优化 */
+      -webkit-transform: translateZ(0); /* Safari GPU加速 */
+    }
+
+    /* 建议项文字样式 */
+    .suggestion-text {
+      position: relative;
+      z-index: 2; /* 层级 */
+      font-weight: 500; /* 中等粗细 */
+      letter-spacing: 0.15px; /* 字符间距 */
+      mix-blend-mode: overlay; /* 混合模式：叠加，实现反色效果 */
+      color: rgba(255, 255, 255, 0.95); /* 文字颜色 */
+      /* 三层阴影效果，增强文字可读性 */
+      text-shadow:
+              0 0 12px rgba(0, 0, 0, 0.7),
+              0 0 5px rgba(0, 0, 0, 0.5),
+              0 1px 2px rgba(0, 0, 0, 0.3);
+      transform: translateZ(0); /* GPU加速 */
+      /*will-change: transform, color, text-shadow;*/ /* 预知属性变化 */
+    }
+
+    /* 建议项背景层（模拟高斯模糊） */
+    .suggestion-item::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(255, 255, 255, 0.05); /* 半透明白色背景 */
+      backdrop-filter: blur(3px); /* 背景模糊 */
+      -webkit-backdrop-filter: blur(3px); /* Safari兼容 */
+      z-index: 1; /* 在文字下方 */
+      opacity: 0; /* 初始透明 */
+      transition: opacity 0.3s ease; /* 透明度过渡动画 */
+      transform: translateZ(0); /* GPU加速 */
+      /*will-change: transform, opacity;*/ /* 预知属性变化 */
+      -webkit-transform: translateZ(0); /* Safari GPU加速 */
+    }
+
+    /* 悬停时显示背景层 */
+    .suggestion-item:hover::before {
+      opacity: 1; /* 显示背景层 */
+    }
+
+    /* 悬停时文字样式变化 */
+    .suggestion-item:hover .suggestion-text {
+      mix-blend-mode: normal; /* 恢复正常混合模式 */
+      color: white; /* 白色文字 */
+      /* 悬停时的三层阴影效果 */
+      text-shadow:
+              0 0 15px rgba(255, 255, 255, 0.3),
+              0 0 8px rgba(255, 255, 255, 0.2),
+              0 1px 2px rgba(0, 0, 0, 0.1);
+    }
+
+    /* 最后一个建议项移除底部边框 */
+    .suggestion-item:last-child {
+      border-bottom: none;
+    }
+
+    /* 建议项图标 */
+    .suggestion-icon {
+      width: 16px;
+      height: 16px;
+      opacity: 0.8; /* 半透明 */
+      flex-shrink: 0; /* 防止缩小 */
+      filter: drop-shadow(0 1px 2px rgba(0,0,0,0.3)); /* 阴影效果 */
+      transform: translateZ(0); /* GPU加速 */
+      /*will-change: transform; !* 预知transform变化 *!*/
+    }
+
+    /* ========== 竞速状态提示 ========== */
+    /* 竞速状态容器 */
+    #race-status-container {
+      padding: 14px 24px; /* 内边距 */
+      border-top: 1px solid rgba(255, 255, 255, 0.08); /* 顶部边框 */
+      background: rgba(30, 30, 30, 0.4); /* 深色半透明背景 */
+      backdrop-filter: blur(10px) saturate(100%); /* 背景模糊 */
+      -webkit-backdrop-filter: blur(10px) saturate(180%); /* Safari兼容 */
+      transition: filter 0.6s var(--transition-ease);
+      display: none; /* 默认隐藏 */
+      align-items: center;
+      gap: 10px; /* 元素间距 */
+      flex-shrink: 0; /* 防止缩小 */
+      transform: translateZ(0); /* GPU加速 */
+      /*will-change: transform; !* 预知transform变化 *!*/
+      contain: layout paint; /* 包含策略优化 */
+    }
+
+    /* 显示竞速状态 */
+    #race-status-container.show {
+      display: flex; /* 显示为弹性布局 */
+      transform: translateZ(0); /* GPU加速 */
+    }
+
+    /* 竞速状态内容 */
+    .race-status-content {
+      font-size: 12px;
+      color: rgba(255, 255, 255, 0.7); /* 半透明白色 */
+      display: flex;
+      align-items: center;
+      gap: 8px; /* 元素间距 */
+      flex: 1; /* 填充剩余空间 */
+      transform: translateZ(0); /* GPU加速 */
+    }
+
+    /* 竞速状态图标 */
+    .race-status-icon {
+      width: 14px;
+      height: 14px;
+      fill: currentColor; /* 使用当前文字颜色 */
+      flex-shrink: 0; /* 防止缩小 */
+      transform: translateZ(0); /* GPU加速 */
+    }
+
+    /* 竞速状态文字 */
+    .race-status-text {
+      flex: 1; /* 填充剩余空间 */
+      font-weight: 400; /* 正常粗细 */
+      letter-spacing: 0.1px; /* 字符间距 */
+      transform: translateZ(0); /* GPU加速 */
+    }
+
+    /* 竞速引擎徽章 */
+    .race-engine-badge {
+      background: rgba(255, 255, 255, 0.1); /* 半透明白色背景 */
+      padding: 4px 10px; /* 内边距 */
+      border-radius: 12px; /* 圆角 */
+      font-size: 11px;
+      font-weight: 500;
+      color: rgba(255, 255, 255, 0.9); /* 文字颜色 */
+      display: inline-flex;
+      align-items: center;
+      gap: 4px; /* 元素间距 */
+      white-space: nowrap; /* 不换行 */
+      flex-shrink: 0; /* 防止缩小 */
+      transform: translateZ(0); /* GPU加速 */
+      /*will-change: transform; !* 预知transform变化 *!*/
+    }
+
+    /* 徽章图标 */
+    .race-engine-badge .badge-icon {
+      width: 10px;
+      height: 10px;
+      fill: currentColor; /* 使用当前文字颜色 */
+      transform: translateZ(0); /* GPU加速 */
+    }
+
+    /* ========== 移动端响应式设计 ========== */
+    /* 平板和手机屏幕 */
+    @media (max-width: 768px) {
+      body {
+        padding: 15px; /* 减小内边距 */
+        justify-content: center; /* 移动端居中布局 */
+        /*padding-top: 80px;*/ /* 为控制按钮留出空间 */
+      }
+
+      .control-buttons {
+        top: 20px;
+        left: 20px;
+        gap: 10px; /* 减小间距 */
+      }
+
+      /* 移动端搜索框聚焦时不移动搜索引擎按钮 */
+      body.search-focused .engine-selector {
+        transform: translateY(-300px) translateZ(0); /* GPU加速 */
+      }
+
+      /* 移动端搜索框聚焦时上移和缩小放大比例 */
+      body.search-focused .search-wrapper {
+        transform: translateY(-300px) scale(1.05) translateZ(0); /* 放大1.05倍，GPU加速 */
+      }
+
+      .search-wrapper.focused {
+        transform: translateY(-40px) scale(1.05) translateZ(0); /* 上移40px并放大1.05倍，GPU加速 */
+      }
+
+      .network-indicator {
+        width: 48px; /* 稍小 */
+        height: 48px; /* 稍小 */
+        min-width: 48px; /* 最小宽度 */
+      }
+
+      .network-icon {
+        width: 22px; /* 稍小 */
+        height: 22px; /* 稍小 */
+      }
+
+      .network-indicator:hover {
+        padding: 0 16px; /* 减小水平内边距 */
+      }
+
+      #bg-upload-btn {
+        padding: 12px 20px; /* 减小内边距 */
+        font-size: 14px; /* 减小字体 */
+        height: 48px; /* 稍小高度 */
+        line-height: 22px; /* 调整行高 */
+        min-width: 150px; /* 最小宽度 */
+      }
+
+      .engine-selector {
+        gap: 10px; /* 减小间距 */
+        margin-bottom: 25px; /* 减小底部外边距 */
+      }
+
+      .engine-btn {
+        padding: 11px 20px; /* 减小内边距 */
+        font-size: 14.5px; /* 减小字体 */
+      }
+
+      #search-input {
+        padding: 21px 60px 21px 24px; /* 调整内边距 */
+        font-size: 17px; /* 减小字体 */
+        height: 62px; /* 稍小高度 */
+      }
+
+      #search-btn {
+        width: 48px; /* 稍小 */
+        height: 48px; /* 稍小 */
+        right: 7px; /* 调整位置 */
+      }
+
+      .search-wrapper.focused #search-btn {
+        width: 52px; /* 稍小 */
+        height: 52px; /* 稍小 */
+        right: 5px; /* 调整位置 */
+      }
+
+      /* 移动端优化触摸区域 */
+      .suggestion-item {
+        min-height: 52px; /* 稍小高度 */
+        padding: 15px 20px; /* 减小内边距 */
+      }
+
+      /* 移动端竞速状态优化 */
+      #race-status-container {
+        padding: 12px 20px; /* 减小内边距 */
+      }
+
+      .race-status-content {
+        font-size: 11px; /* 减小字体 */
+      }
+
+      .race-engine-badge {
+        font-size: 10px; /* 减小字体 */
+        padding: 3px 8px; /* 减小内边距 */
+      }
+    }
+
+    /* 小屏幕手机 */
+    @media (max-width: 480px) {
+      body {
+        padding: 10px; /* 进一步减小内边距 */
+        /*padding-top: 70px;*/ /* 调整顶部内边距 */
+      }
+
+      .control-buttons {
+        top: 15px;
+        left: 15px;
+      }
+
+      /* 小屏幕搜索框聚焦时向上移动搜索引擎按钮 */
+      body.search-focused .engine-selector {
+        transform: translateY(-250px) translateZ(0); /* GPU加速 */
+      }
+
+      /* 小屏幕搜索框聚焦时上移和进一步缩小放大比例 */
+      body.search-focused .search-wrapper {
+        transform: translateY(-250px) scale(1.03) translateZ(0); /* 放大1.03倍，GPU加速 */
+      }
+
+      .search-wrapper.focused {
+        transform: translateY(-30px) scale(1.03) translateZ(0); /* 上移30px并放大1.03倍，GPU加速 */
+      }
+
+      #bg-upload-btn {
+        padding: 10px 16px; /* 进一步减小内边距 */
+        font-size: 13px; /* 进一步减小字体 */
+        min-width: 140px; /* 最小宽度 */
+      }
+
+      .engine-selector {
+        gap: 8px; /* 进一步减小间距 */
+        margin-bottom: 20px; /* 进一步减小底部外边距 */
+      }
+
+      .engine-btn {
+        padding: 10px 16px; /* 进一步减小内边距 */
+        font-size: 14px; /* 进一步减小字体 */
+      }
+
+      /* 小屏幕手机竞速状态优化 */
+      #race-status-container {
+        padding: 10px 16px; /* 进一步减小内边距 */
+      }
+
+      .race-status-content {
+        font-size: 10px; /* 进一步减小字体 */
+        gap: 6px; /* 减小间距 */
+      }
+
+      .race-status-icon {
+        width: 12px; /* 进一步减小 */
+        height: 12px; /* 进一步减小 */
+      }
+
+      .race-engine-badge {
+        font-size: 9px; /* 进一步减小字体 */
+        padding: 2px 6px; /* 进一步减小内边距 */
+      }
+    }
+
+    /* ========== iOS设备特殊优化 ========== */
+    @supports (-webkit-touch-callout: none) {
+      body {
+        padding-bottom: var(--ios-safe-area-inset-bottom); /* 适配iOS安全区域 */
+        padding-top: calc(var(--ios-safe-area-inset-top) + 20px); /* 适配iOS安全区域 */
+        height: 100%;
+        overflow: hidden; /* 防止整体页面滚动 */
+      }
+
+      /* 防止在iOS上点击时出现灰色高亮 */
+      .suggestion-item {
+        -webkit-tap-highlight-color: transparent;
+      }
+
+      /* iOS上的滚动优化 */
+      #suggestions {
+        -webkit-overflow-scrolling: touch;
+      }
+
+      /* iOS输入框优化 */
+      #search-input:focus {
+        font-size: 16px !important; /* 强制字体大小，防止iOS自动放大 */
+      }
+
+      /* ========== 为iOS设备调整搜索框聚焦时的上移距离 ========== */
+      /* 核心修改：针对所有iOS设备（iPhone和iPad）减少上移距离 */
+      /* 原来的250px/300px上移会导致键盘遮挡计算，现调整为更合适的值 */
+
+      /* 1. 针对iPhone设备（屏幕宽度小于768px） */
+      @media (max-width: 767px) {
+        /* 搜索框聚焦时，搜索引擎按钮上移距离调整：从-250px/-300px改为-115px */
+        body.search-focused .engine-selector {
+          transform: translateY(-115px) translateZ(0); /* iOS iPhone：上移115px，GPU加速 */
+        }
+
+        /* 搜索框聚焦时上移和放大距离调整：从-250px/-300px改为-115px */
+        body.search-focused .search-wrapper {
+          transform: translateY(-115px) scale(1.1) translateZ(0); /* iOS iPhone：上移115px并放大1.1倍，GPU加速 */
+        }
+
+        /* 搜索包装器聚焦状态的上移距离调整 */
+        .search-wrapper.focused {
+          transform: translateY(-60px) scale(1.1) translateZ(0); /* 保持原有-60px不变，GPU加速 */
+        }
+      }
+
+      /* 2. 针对iPad设备（屏幕宽度大于等于768px） */
+      @media (min-width: 768px) {
+        /* 搜索框聚焦时，搜索引擎按钮上移距离调整：从-250px改为-135px */
+        body.search-focused .engine-selector {
+          transform: translateY(-135px) translateZ(0); /* iOS iPad：上移125px，GPU加速 */
+        }
+
+        /* 搜索框聚焦时上移和放大距离调整：从-250px改为-135px */
+        body.search-focused .search-wrapper {
+          transform: translateY(-135px) scale(1.1) translateZ(0); /* iOS iPad：上移125px并放大1.1倍，GPU加速 */
+        }
+
+        /* 搜索包装器聚焦状态的上移距离调整 */
+        .search-wrapper.focused {
+          transform: translateY(-60px) scale(1.1) translateZ(0); /* 保持原有-60px不变，GPU加速 */
+        }
+      }
+
+      /* 3. 移动端响应式设计的覆盖调整（确保在小屏幕iPhone上正确应用） */
+      @media (max-width: 768px) {
+        /* 覆盖原来的移动端搜索框聚焦时上移距离 */
+        body.search-focused .engine-selector {
+          transform: translateY(-115px) translateZ(0); /* iOS iPhone：上移115px，GPU加速 */
+        }
+
+        /* 覆盖原来的移动端搜索框聚焦时上移和缩小放大比例 */
+        body.search-focused .search-wrapper {
+          transform: translateY(-115px) scale(1.05) translateZ(0); /* iOS iPhone：上移115px并放大1.05倍，GPU加速 */
+        }
+
+        .search-wrapper.focused {
+          transform: translateY(-40px) scale(1.05) translateZ(0); /* 保持原有-40px不变，GPU加速 */
+        }
+      }
+
+      /* 4. 小屏幕手机响应式设计的覆盖调整 */
+      @media (max-width: 480px) {
+        /* 覆盖原来的小屏幕搜索框聚焦时向上移动搜索引擎按钮 */
+        body.search-focused .engine-selector {
+          transform: translateY(-115px) translateZ(0); /* iOS iPhone：上移115px，GPU加速 */
+        }
+
+        /* 覆盖原来的小屏幕搜索框聚焦时上移和进一步缩小放大比例 */
+        body.search-focused .search-wrapper {
+          transform: translateY(-115px) scale(1.03) translateZ(0); /* iOS iPhone：上移115px并放大1.03倍，GPU加速 */
+        }
+
+        .search-wrapper.focused {
+          transform: translateY(-30px) scale(1.03) translateZ(0); /* 保持原有-30px不变，GPU加速 */
+        }
+      }
+    }
+
+    /* ========== 加载动画 ========== */
+    /* 加载中动画 */
+    .loading-dots {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px; /* 点之间的间距 */
+      padding: 5px 0; /* 垂直内边距 */
+      transform: translateZ(0); /* GPU加速 */
+    }
+
+    /* 加载点 */
+    .loading-dots span {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%; /* 圆形 */
+      background: rgba(255, 255, 255, 0.7); /* 半透明白色 */
+      animation: loading-dot 1.4s infinite ease-in-out both; /* 动画 */
+      transform: translateZ(0); /* GPU加速 */
+      /*will-change: transform, opacity; !* 预知属性变化 *!*/
+    }
+
+    /* 第一个点动画延迟 */
+    .loading-dots span:nth-child(1) {
+      animation-delay: -0.32s;
+    }
+
+    /* 第二个点动画延迟 */
+    .loading-dots span:nth-child(2) {
+      animation-delay: -0.16s;
+    }
+
+    /* 加载点动画关键帧 */
+    @keyframes loading-dot {
+      0%, 80%, 100% {
+        transform: scale(0) translateZ(0); /* 缩小到0，GPU加速 */
+        opacity: 0.5; /* 半透明 */
+      }
+      40% {
+        transform: scale(1) translateZ(0); /* 放大到正常大小，GPU加速 */
+        opacity: 1; /* 完全不透明 */
+      }
+    }
+
+    /* ========== 空状态提示 ========== */
+    /* 无建议时的提示 */
+    .no-suggestions {
+      padding: 24px;
+      text-align: center; /* 居中 */
+      color: rgba(255, 255, 255, 0.6); /* 半透明白色 */
+      font-size: 14px;
+      transform: translateZ(0); /* GPU加速 */
+    }
+
+    /* ========== 键盘检测辅助类 ========== */
+    /* 键盘显示时调整底部内边距 */
+    .keyboard-visible {
+      /* 已经通过position: fixed和height: 100%解决，不需要额外调整 */
+      transition: all 0s var(--transition-ease); /* 过渡动画 */
+    }
+  </style>
+</head>
+<body>
+<!-- 背景容器 -->
+<div id="background-container">
+  <!-- 默认背景：渐变背景 -->
+  <div class="default-background"></div>
+  <!-- 自定义背景图片，初始隐藏 -->
+  <img id="background-image" alt="背景" style="display:none;">
+</div>
+
+<!-- 控制按钮容器 - 左上角 -->
+<div class="control-buttons">
+  <!-- 网络状态指示器 -->
+  <div class="network-indicator checking" id="network-indicator" title="正在检测网络...">
+    <!-- 在线状态SVG图标 -->
+    <svg class="network-icon online-icon" style="display: none;" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+    </svg>
+
+    <!-- 离线状态SVG图标 -->
+    <svg class="network-icon offline-icon" style="display: none;" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+    </svg>
+
+    <!-- 警告状态SVG图标 -->
+    <svg class="network-icon warning-icon" style="display: none;" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/>
+    </svg>
+
+    <!-- 检测中状态SVG图标 -->
+    <svg class="network-icon checking-icon" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/>
+    </svg>
+
+    <!-- 网络状态工具提示文字 -->
+    <span class="network-tooltip" id="network-tooltip">正在检测网络...</span>
+  </div>
+
+  <!-- 自定义背景按钮 -->
+  <div class="background-controls">
+    <!-- 自定义背景上传按钮 -->
+    <label id="bg-upload-btn" for="bg-file-input">
+      <!-- 上传图标 -->
+      <svg class="engine-icon" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+        <rect x="3" y="3" width="18" height="18" rx="2" stroke="white" stroke-width="2" fill="none"/>
+        <circle cx="8.5" cy="9.5" r="1.5" fill="white"/>
+        <path d="M21 15L16 10L5 21" stroke="white" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+      自定义背景
+    </label>
+    <!-- 文件上传输入框，隐藏但功能正常 -->
+    <input type="file" id="bg-file-input" accept="image/*">
+  </div>
+</div>
+
+<!-- 搜索引擎选择器 -->
+<div class="engine-selector">
+  <!-- 百度搜索引擎按钮，初始为激活状态 -->
+  <button class="engine-btn active" data-engine="baidu">
+    <!-- 百度图标 -->
+    <svg class="engine-icon" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="12" cy="12" r="10" fill="#2932E1"/>
+      <text x="12" y="16" text-anchor="middle" fill="white" font-size="12" font-weight="bold">B</text>
+    </svg>
+    <span class="engine-btn-text">百度</span>
+  </button>
+
+  <!-- 必应搜索引擎按钮 -->
+  <button class="engine-btn" data-engine="bing">
+    <!-- 必应图标 -->
+    <svg class="engine-icon" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <path d="M5 3H19V21H5L12 18L19 21V3Z" fill="#008373"/>
+      <text x="12" y="16" text-anchor="middle" fill="white" font-size="12" font-weight="bold">B</text>
+    </svg>
+    <span class="engine-btn-text">必应</span>
+  </button>
+
+  <!-- 谷歌搜索引擎按钮 -->
+  <button class="engine-btn" data-engine="google">
+    <!-- 谷歌图标 -->
+    <svg class="engine-icon" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="12" cy="12" r="10" fill="#4285F4"/>
+      <text x="12" y="16" text-anchor="middle" fill="white" font-size="12" font-weight="bold">G</text>
+    </svg>
+    <span class="engine-btn-text">谷歌</span>
+  </button>
+
+  <!-- DuckDuckGo搜索引擎按钮 -->
+  <button class="engine-btn" data-engine="duckduckgo">
+    <!-- DuckDuckGo图标 -->
+    <svg class="engine-icon" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="12" cy="12" r="10" fill="#DE5833"/>
+      <text x="12" y="16" text-anchor="middle" fill="white" font-size="12" font-weight="bold">D</text>
+    </svg>
+    <span class="engine-btn-text">DuckDuckGo</span>
+  </button>
+</div>
+
+<!-- 搜索包装器 -->
+<div class="search-wrapper" id="search-wrapper">
+  <!-- 搜索输入框 -->
+  <input type="text" id="search-input" placeholder="输入内容开始搜索..." autocomplete="off" spellcheck="false">
+
+  <!-- 搜索按钮 -->
+  <button id="search-btn">
+    <!-- 搜索图标 -->
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="11" cy="11" r="8" stroke="white" stroke-width="2"/>
+      <path d="M16.5 16.5L21 21" stroke="white" stroke-width="2" stroke-linecap="round"/>
+    </svg>
+  </button>
+
+  <!-- 搜索建议容器 -->
+  <div id="suggestions">
+    <!-- 搜索建议内容区域 -->
+    <div id="suggestions-content"></div>
+    <!-- 竞速状态容器 -->
+    <div id="race-status-container"></div>
+  </div>
+</div>
+
+<script>
+  // ========== 核心配置 ==========
+  const CONFIG = {
+    // 搜索引擎配置
+    engines: {
+      baidu: {
+        name: '百度',
+        url: 'https://www.baidu.com/s?wd=',
+        color: '#2932e1',
+        shortName: '百度'
+      },
+      bing: {
+        name: '必应',
+        url: 'https://www.bing.com/search?q=',
+        color: '#008373',
+        shortName: '必应'
+      },
+      google: {
+        name: '谷歌',
+        url: 'https://www.google.com/search?q=',
+        color: '#4285F4',
+        shortName: '谷歌'
+      },
+      duckduckgo: {
+        name: 'DuckDuckGo',
+        url: 'https://duckduckgo.com/?q=',
+        color: '#DE5833',
+        shortName: 'Duck'
+      }
+    },
+
+    // 在线代理列表，用于跨域请求
+    onlineProxies: [
+      {
+        name: 'CORS Anywhere',
+        buildUrl: (targetUrl) => `https://cors-anywhere.herokuapp.com/${targetUrl}`,
+        processData: (data) => data
+      },
+      {
+        name: 'AllOrigins',
+        // 关键修改点1：修复AllOrigins代理对DuckDuckGo双重JSON字符串的处理
+        buildUrl: (targetUrl) => `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}`,
+        processData: (data) => {
+          try {
+            // 对于 DuckDuckGo 返回的 JSON 字符串，需要处理双重解析
+            let contents = data.contents;
+            // 如果 contents 是字符串，尝试解析（解决DuckDuckGo返回的双重JSON问题）
+            if (typeof contents === 'string') {
+              try {
+                contents = JSON.parse(contents);
+              } catch (e) {
+                // 如果解析失败，保持原样
+                console.warn('无法解析 AllOrigins 返回的 contents 字符串:', e);
+              }
+            }
+            return contents; // 返回解析后的内容
+          } catch (e) {
+            throw new Error('Failed to parse AllOrigins response');
+          }
+        }
+      },
+      {
+        name: 'CORS Proxy (GitHub)',
+        buildUrl: (targetUrl) => `https://corsproxy.github.io/?${encodeURIComponent(targetUrl)}`,
+        processData: (data) => data
+      },
+      {
+        name: 'CORS Proxy (IO)',
+        buildUrl: (targetUrl) => `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`,
+        processData: (data) => data
+      },
+      {
+        name: 'N2YO CORS Proxy',
+        buildUrl: (targetUrl) => `https://cors.n2yo.com/?${encodeURIComponent(targetUrl)}`,
+        processData: (data) => data
+      }
+    ],
+
+    // 各搜索引擎原始建议API
+    originalSuggestAPI: {
+      baidu: (q) => `https://www.baidu.com/sugrec?pre=1&p=3&ie=utf-8&json=1&prod=pc&from=pc_web&sugsid=1467&wd=${q}`,
+      bing: (q) => `https://api.bing.com/osjson.aspx?query=${q}`,
+      google: (q) => `https://suggestqueries.google.com/complete/search?client=chrome&q=${q}`,
+      duckduckgo: (q) => `https://duckduckgo.com/ac/?q=${q}&type=list`
+    },
+
+    // JSONP配置，用于跨域获取搜索建议
+    jsonpConfigs: {
+      baidu: {
+        url: (q) => `https://www.baidu.com/sugrec?pre=1&p=3&ie=utf-8&json=1&prod=pc&from=pc_web&sugsid=1467&wd=${q}&cb=`,
+        callbackParam: 'cb', // 回调参数名
+        extractData: (data) => data.g ? data.g.map(item => item.q).slice(0, 8) : [] // 提取建议数据
+      },
+      bing: {
+        url: (q) => `https://api.bing.com/osjson.aspx?query=${q}`,
+        callbackParam: 'callback',
+        extractData: (data) => {
+          return Array.isArray(data) && data.length > 1 ? data[1].slice(0, 8) : []
+        }
+      },
+      google: {
+        url: (q) => `https://suggestqueries.google.com/complete/search?client=chrome&q=${q}&callback=`,
+        callbackParam: 'callback',
+        extractData: (data) => Array.isArray(data) && data.length > 1 ? data[1].slice(0, 8) : []
+      },
+      // 关键修改点2：修复DuckDuckGo的JSONP数据提取逻辑
+      duckduckgo: {
+        url: (q) => `https://duckduckgo.com/ac/?q=${q}`,
+        callbackParam: 'callback',
+        extractData: (data) => {
+          // DuckDuckGo 返回的数据格式：["查询词", ["建议1", "建议2", ...]]
+          if (Array.isArray(data) && data.length >= 2 && Array.isArray(data[1])) {
+            return data[1].slice(0, 8); // 返回建议数组的前8个元素
+          }
+          // 备用格式：对象数组，每个对象有phrase属性
+          if (Array.isArray(data)) {
+            return data.map(item => item.phrase || item).slice(0, 8);
+          }
+          return []; // 如果数据格式不符合预期，返回空数组
+        }
+      }
+    },
+
+    // 离线备用建议库
+    offlineFallbacks: ['是什么', '怎么用', '教程', '2025', '最新', '下载', '官网', '在线']
+  };
+
+  // ========== 全局状态变量 ==========
+  let currentEngine = 'baidu'; // 当前选中的搜索引擎
+  let isOnline = false; // 网络连接状态
+  let lastQuery = ''; // 上次查询的关键词
+  let backgroundImageSet = false; // 是否设置了自定义背景
+
+  // IndexedDB相关变量
+  let db = null; // IndexedDB数据库实例
+  const DB_NAME = 'BackgroundStorage'; // 数据库名称
+  const DB_VERSION = 1; // 数据库版本
+  const STORE_NAME = 'backgrounds'; // 对象存储名称
+
+  // JSONP回调计数器
+  let jsonpCallbackCounter = 0; // 用于生成唯一的JSONP回调函数名
+
+  // 横向竞速相关变量
+  let raceControllers = new Map(); // 存储竞速请求的AbortController
+  let fastestEngine = null; // 最快的搜索引擎
+  let raceStartTime = 0; // 竞速开始时间
+
+  // 滚动交互优化相关变量
+  let suggestionsContent = null; // 搜索建议内容容器
+  let isTouchDevice = false; // 是否为触摸设备
+  let raceStatusContainer = null; // 竞速状态容器
+
+  // 新增：键盘状态跟踪
+  let isKeyboardVisible = false; // 键盘是否可见
+  let windowHeight = window.innerHeight; // 窗口高度
+
+  // ========== DOM 元素引用 ==========
+  const searchInput = document.getElementById('search-input'); // 搜索输入框
+  const searchBtn = document.getElementById('search-btn'); // 搜索按钮
+  const suggestionsBox = document.getElementById('suggestions'); // 搜索建议框
+  const engineBtns = document.querySelectorAll('.engine-btn'); // 所有搜索引擎按钮
+  const bgFileInput = document.getElementById('bg-file-input'); // 背景文件输入框
+  const bgUploadBtn = document.getElementById('bg-upload-btn'); // 背景上传按钮
+  const backgroundContainer = document.getElementById('background-container'); // 背景容器
+  const backgroundImage = document.getElementById('background-image'); // 背景图片元素
+  const defaultBackground = document.querySelector('.default-background'); // 默认背景
+  const searchWrapper = document.getElementById('search-wrapper'); // 搜索包装器
+  const networkIndicator = document.getElementById('network-indicator'); // 网络状态指示器
+  const networkTooltip = document.getElementById('network-tooltip'); // 网络状态工具提示
+
+  // ========== 键盘布局管理器 ==========
+  class KeyboardLayoutManager {
+    constructor() {
+      this.isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent); // 检测是否为移动设备
+      this.isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream; // 检测是否为iOS设备
+      this.keyboardHeight = 0; // 键盘高度
+      this.originalBodyHeight = document.body.clientHeight; // 原始body高度
+      this.setupEventListeners(); // 设置事件监听器
+    }
+
+    setupEventListeners() {
+      // 监听窗口大小变化
+      window.addEventListener('resize', this.handleResize.bind(this));
+
+      // iOS键盘检测
+      if (this.isIOS && window.visualViewport) {
+        window.visualViewport.addEventListener('resize', this.handleIOSKeyboard.bind(this));
+      }
+
+      // 监听输入框焦点变化
+      searchInput.addEventListener('focus', () => {
+        this.handleKeyboardShow();
+      });
+
+      searchInput.addEventListener('blur', () => {
+        setTimeout(() => {
+          if (document.activeElement !== searchInput && !document.activeElement.closest('#suggestions')) {
+            this.handleKeyboardHide();
+          }
+        }, 100);
+      });
+    }
+
+    handleResize() {
+      const newHeight = window.innerHeight; // 获取新的窗口高度
+
+      // 检测键盘是否显示（窗口高度减少）
+      if (newHeight < windowHeight * 0.7) {
+        this.keyboardHeight = windowHeight - newHeight; // 计算键盘高度
+        this.handleKeyboardShow(); // 处理键盘显示
+      } else {
+        this.keyboardHeight = 0; // 重置键盘高度
+        this.handleKeyboardHide(); // 处理键盘隐藏
+      }
+
+      windowHeight = newHeight; // 更新窗口高度
+      this.updateSuggestionsHeight(); // 更新建议框高度
+    }
+
+    handleIOSKeyboard(e) {
+      const visualViewport = e.target; // 获取视觉视口
+      const layoutViewport = document.documentElement; // 获取布局视口
+
+      // 计算键盘高度
+      const keyboardHeight = layoutViewport.clientHeight - visualViewport.height;
+
+      if (keyboardHeight > 100) {
+        this.keyboardHeight = keyboardHeight; // 设置键盘高度
+        this.handleKeyboardShow(); // 处理键盘显示
+      } else {
+        this.keyboardHeight = 0; // 重置键盘高度
+        this.handleKeyboardHide(); // 处理键盘隐藏
+      }
+
+      this.updateSuggestionsHeight(); // 更新建议框高度
+    }
+
+    handleKeyboardShow() {
+      if (isKeyboardVisible) return; // 如果键盘已经可见，直接返回
+
+      isKeyboardVisible = true; // 设置键盘可见状态
+      document.body.classList.add('keyboard-visible'); // 添加键盘可见类
+
+      // 保存当前滚动位置
+      this.savedScrollTop = document.documentElement.scrollTop || document.body.scrollTop;
+
+      // 防止页面跳动 - 关键修改
+      document.body.style.height = `${this.originalBodyHeight}px`; // 固定body高度
+      document.body.style.overflow = 'hidden'; // 隐藏滚动条
+
+      // 滚动到输入框位置
+      if (this.isMobile) {
+        setTimeout(() => {
+          this.scrollToInput();
+        }, 300);
+      }
+    }
+
+    handleKeyboardHide() {
+      if (!isKeyboardVisible) return; // 如果键盘不可见，直接返回
+
+      isKeyboardVisible = false; // 设置键盘不可见状态
+      document.body.classList.remove('keyboard-visible'); // 移除键盘可见类
+
+      // 恢复body样式
+      document.body.style.height = ''; // 恢复body高度
+      document.body.style.overflow = ''; // 恢复滚动条
+
+      // 恢复滚动位置
+      if (this.savedScrollTop !== undefined) {
+        setTimeout(() => {
+          window.scrollTo(0, this.savedScrollTop); // 滚动到保存的位置
+          this.savedScrollTop = undefined; // 清除保存的位置
+        }, 100);
+      }
+    }
+
+    scrollToInput() {
+      const inputRect = searchInput.getBoundingClientRect(); // 获取输入框位置信息
+      const viewportHeight = window.innerHeight; // 获取视口高度
+      const inputBottom = inputRect.bottom; // 获取输入框底部位置
+
+      // 如果输入框底部在视口下方，滚动到可见位置
+      if (inputBottom > viewportHeight) {
+        const scrollY = window.scrollY + (inputBottom - viewportHeight) + 10; // 计算滚动位置
+        window.scrollTo({
+          top: scrollY,
+          behavior: 'smooth' // 平滑滚动
+        });
+      }
+    }
+
+    updateSuggestionsHeight() {
+      if (!suggestionsBox || !suggestionsBox.classList.contains('show')) return; // 如果建议框不存在或未显示，直接返回
+
+      const searchRect = searchWrapper.getBoundingClientRect(); // 获取搜索框位置信息
+      const availableHeight = window.innerHeight - searchRect.bottom - 40; // 计算可用高度
+
+      // 考虑键盘高度，计算最大高度
+      const maxHeight = Math.min(
+              460, // 最大高度限制
+              Math.max(200, availableHeight - (this.keyboardHeight > 0 ? this.keyboardHeight : 0)) // 考虑键盘高度的最小高度
+      );
+
+      suggestionsBox.style.maxHeight = `${maxHeight}px`; // 设置建议框最大高度
+    }
+  }
+
+  // ========== 增强版：背景颜色适应系统 ==========
+  class EnhancedBackgroundColorAdapter {
+    constructor() {
+      this.canvas = document.createElement('canvas'); // 创建画布用于分析图片
+      this.ctx = this.canvas.getContext('2d', { willReadFrequently: true }); // 获取2D上下文
+      this.elementsToAdapt = []; // 需要适应背景颜色的元素列表
+      this.lastBrightness = 0.5; // 上次计算的亮度值
+      this.updateInterval = null; // 更新间隔定时器
+      this.initialized = false; // 是否已初始化
+      this.originalBGUploadIconSVG = null; // 原始背景上传按钮图标SVG
+      this.originalBGUploadBtnHTML = null; // 原始背景上传按钮HTML
+    }
+
+    initialize() {
+      if (this.initialized) return; // 如果已初始化，直接返回
+
+      this.saveOriginalBGUploadBtnHTML(); // 保存原始背景上传按钮HTML
+      this.collectAdaptableElements(); // 收集需要适应的元素
+      this.analyzeAndAdapt(); // 分析背景并适应颜色
+      this.setupEventListeners(); // 设置事件监听器
+
+      this.initialized = true; // 标记为已初始化
+    }
+
+    saveOriginalBGUploadBtnHTML() {
+      if (bgUploadBtn) {
+        this.originalBGUploadBtnHTML = bgUploadBtn.innerHTML; // 保存原始HTML
+      }
+    }
+
+    collectAdaptableElements() {
+      this.elementsToAdapt = []; // 清空元素列表
+
+      // 收集所有搜索引擎按钮文字
+      document.querySelectorAll('.engine-btn-text').forEach(span => {
+        this.elementsToAdapt.push({
+          element: span,
+          type: 'text',
+          selector: '.engine-btn-text'
+        });
+      });
+
+      // 收集背景上传按钮
+      const bgUploadBtn = document.getElementById('bg-upload-btn');
+      if (bgUploadBtn) {
+        let textWrapper = bgUploadBtn.querySelector('.bg-upload-text-wrapper');
+
+        if (!textWrapper) {
+          const textNodes = Array.from(bgUploadBtn.childNodes).filter(node =>
+                  node.nodeType === Node.TEXT_NODE && node.textContent.trim()
+          );
+
+          if (textNodes.length > 0) {
+            textWrapper = document.createElement('span');
+            textWrapper.className = 'bg-upload-text-wrapper';
+            textWrapper.textContent = textNodes[0].textContent;
+            textNodes[0].replaceWith(textWrapper);
+          }
+        }
+
+        if (textWrapper) {
+          this.elementsToAdapt.push({
+            element: textWrapper,
+            type: 'text',
+            selector: '.bg-upload-text-wrapper'
+          });
+        }
+      }
+
+      // 收集背景上传图标
+      const bgUploadIcon = bgUploadBtn.querySelector('.engine-icon');
+      if (bgUploadIcon) {
+        this.elementsToAdapt.push({
+          element: bgUploadIcon,
+          type: 'svg',
+          selector: '#bg-upload-btn .engine-icon'
+        });
+      }
+
+      // 收集必应图标文字
+      const bingButton = document.querySelector('.engine-btn[data-engine="bing"]');
+      if (bingButton) {
+        const bingIconText = bingButton.querySelector('.engine-icon text');
+        if (bingIconText) {
+          this.elementsToAdapt.push({
+            element: bingIconText,
+            type: 'svg-text',
+            selector: '.engine-btn[data-engine="bing"] .engine-icon text'
+          });
+        }
+      }
+
+      // 收集网络状态工具提示
+      if (networkTooltip) {
+        this.elementsToAdapt.push({
+          element: networkTooltip,
+          type: 'text-no-shadow',
+          selector: '.network-tooltip'
+        });
+      }
+
+      // 收集搜索输入框
+      if (searchInput) {
+        this.elementsToAdapt.push({
+          element: searchInput,
+          type: 'input-text-no-shadow',
+          selector: '#search-input'
+        });
+      }
+
+      // 设置搜索输入框占位符颜色数据属性
+      if (searchInput) {
+        searchInput.dataset.placeholderColor = '';
+      }
+    }
+
+    setupEventListeners() {
+      // 监听背景图片加载完成
+      backgroundImage.addEventListener('load', () => {
+        setTimeout(() => this.analyzeAndAdapt(), 0); // 延迟0ms后分析并适应
+      });
+
+      // 监听窗口大小变化
+      window.addEventListener('resize', () => {
+        clearTimeout(this.resizeTimer); // 清除之前的定时器
+        this.resizeTimer = setTimeout(() => {
+          this.analyzeAndAdapt(); // 延迟0ms后分析并适应
+        }, 0);
+      });
+
+      // 监听窗口滚动
+      window.addEventListener('scroll', () => {
+        if (!this.isAnalyzing) {
+          requestAnimationFrame(() => this.analyzeAndAdapt()); // 在下一帧分析并适应
+        }
+      });
+
+      // 定期更新颜色适应
+      this.updateInterval = setInterval(() => {
+        this.analyzeAndAdapt(); // 每3秒分析并适应一次
+      }, 3000);
+    }
+
+    analyzeBackgroundBrightness() {
+      try {
+        const hasCustomBg = backgroundImage.style.display !== 'none'; // 检查是否有自定义背景
+
+        if (!hasCustomBg) {
+          return 0.3; // 如果没有自定义背景，返回默认亮度
+        }
+
+        if (!backgroundImage.complete || backgroundImage.naturalWidth === 0) {
+          return this.lastBrightness; // 如果图片未加载完成，返回上次计算的亮度
+        }
+
+        // 设置画布尺寸（限制最大尺寸以提高性能）
+        this.canvas.width = Math.min(backgroundImage.naturalWidth, 100);
+        this.canvas.height = Math.min(backgroundImage.naturalHeight, 100);
+
+        // 在画布上绘制背景图片
+        this.ctx.drawImage(backgroundImage, 0, 0, this.canvas.width, this.canvas.height);
+        const imageData = this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height); // 获取图像数据
+        const data = imageData.data; // 获取像素数据
+
+        let totalLuminance = 0; // 总亮度
+        for (let i = 0; i < data.length; i += 4) {
+          const r = data[i]; // 红色通道
+          const g = data[i + 1]; // 绿色通道
+          const b = data[i + 2]; // 蓝色通道
+          const luminance = 0.299 * r + 0.587 * g + 0.114 * b; // 计算亮度（人眼感知）
+          totalLuminance += luminance; // 累加亮度
+        }
+
+        const avgLuminance = totalLuminance / (data.length / 4); // 计算平均亮度
+        const normalizedBrightness = avgLuminance / 255; // 归一化亮度值（0-1）
+
+        this.lastBrightness = normalizedBrightness; // 保存亮度值
+        return normalizedBrightness; // 返回归一化亮度值
+      } catch (error) {
+        console.warn('背景亮度分析失败:', error); // 输出警告信息
+        return this.lastBrightness; // 返回上次计算的亮度
+      }
+    }
+
+    applyColorAdaptation(brightness) {
+      const isLightBackground = brightness > 0.6; // 判断是否为浅色背景
+
+      // 遍历所有需要适应的元素
+      this.elementsToAdapt.forEach(item => {
+        const element = item.element; // 获取元素
+
+        try {
+          if (isLightBackground) {
+            this.applyDarkStyle(element, item.type, item); // 应用深色样式
+          } else {
+            this.applyLightStyle(element, item.type, item); // 应用浅色样式
+          }
+        } catch (error) {
+          console.warn(`适配元素失败 (${item.selector}):`, error); // 输出警告信息
+        }
+      });
+
+      this.applyPlaceholderColor(isLightBackground); // 应用占位符颜色
+    }
+
+    applyDarkStyle(element, type, item) {
+      const darkColor = 'rgba(30, 30, 30, 0.95)'; // 深色文字颜色
+      const darkShadow = '0 0 4px rgba(255, 255, 255, 0.6), 0 0 8px rgba(255, 255, 255, 0.4), 0 1px 2px rgba(255, 255, 255, 0.3)'; // 深色阴影
+
+      switch(type) {
+        case 'text':
+          element.style.color = darkColor; // 设置文字颜色
+          element.style.textShadow = darkShadow; // 设置文字阴影
+          break;
+
+        case 'text-no-shadow':
+          element.style.color = darkColor; // 设置文字颜色
+          element.style.textShadow = 'none'; // 移除文字阴影
+          break;
+
+        case 'svg':
+          if (element.tagName.toLowerCase() === 'svg') {
+            this.applyColorToSVG(element, darkColor); // 应用颜色到SVG
+          }
+          break;
+
+        case 'svg-text':
+          element.setAttribute('fill', darkColor); // 设置填充颜色
+          element.style.filter = 'none'; // 移除滤镜
+          break;
+
+        case 'input-text-no-shadow':
+          element.style.color = darkColor; // 设置输入框文字颜色
+          element.style.textShadow = 'none'; // 移除文字阴影
+          break;
+      }
+    }
+
+    applyLightStyle(element, type, item) {
+      const lightColor = 'rgba(255, 255, 255, 0.95)'; // 浅色文字颜色
+      const lightShadow = '0 0 4px rgba(0, 0, 0, 0.6), 0 0 8px rgba(0, 0, 0, 0.4), 0 1px 2px rgba(0, 0, 0, 0.3)'; // 浅色阴影
+
+      switch(type) {
+        case 'text':
+          element.style.color = lightColor; // 设置文字颜色
+          element.style.textShadow = lightShadow; // 设置文字阴影
+          break;
+
+        case 'text-no-shadow':
+          element.style.color = lightColor; // 设置文字颜色
+          element.style.textShadow = 'none'; // 移除文字阴影
+          break;
+
+        case 'svg':
+          if (element.tagName.toLowerCase() === 'svg') {
+            this.applyColorToSVG(element, lightColor); // 应用颜色到SVG
+          }
+          break;
+
+        case 'svg-text':
+          element.setAttribute('fill', lightColor); // 设置填充颜色
+          element.style.filter = 'none'; // 移除滤镜
+          break;
+
+        case 'input-text-no-shadow':
+          element.style.color = lightColor; // 设置输入框文字颜色
+          element.style.textShadow = 'none'; // 移除文字阴影
+          break;
+      }
+    }
+
+    applyColorToSVG(svgElement, color) {
+      svgElement.style.stroke = color; // 设置SVG描边颜色
+      const paths = svgElement.querySelectorAll('path, circle, rect, line'); // 获取所有路径元素
+      paths.forEach(path => {
+        const currentFill = path.getAttribute('fill'); // 获取当前填充颜色
+        if (currentFill && currentFill !== 'none') {
+          path.setAttribute('fill', color); // 设置填充颜色
+        }
+        if (path.getAttribute('stroke')) {
+          path.setAttribute('stroke', color); // 设置描边颜色
+        }
+      });
+    }
+
+    applyPlaceholderColor(isLightBackground) {
+      if (!searchInput) return; // 如果没有搜索输入框，直接返回
+
+      const placeholderColor = isLightBackground
+              ? 'rgba(30, 30, 30, 0.7)' // 浅色背景使用深色占位符
+              : 'rgba(255, 255, 255, 0.7)'; // 深色背景使用浅色占位符
+
+      const styleId = 'placeholder-color-style'; // 样式ID
+      let styleElement = document.getElementById(styleId); // 获取样式元素
+
+      if (!styleElement) {
+        styleElement = document.createElement('style'); // 创建样式元素
+        styleElement.id = styleId; // 设置ID
+        document.head.appendChild(styleElement); // 添加到head
+      }
+
+      // 设置占位符样式
+      styleElement.textContent = `
+        #search-input::placeholder {
+          color: ${placeholderColor} !important;
+          text-shadow: none !important;
+        }
+      `;
+    }
+
+    analyzeAndAdapt() {
+      try {
+        this.isAnalyzing = true; // 标记为正在分析
+        const brightness = this.analyzeBackgroundBrightness(); // 分析背景亮度
+        this.applyColorAdaptation(brightness); // 应用颜色适应
+      } catch (error) {
+        console.warn('颜色适应失败:', error); // 输出警告信息
+      } finally {
+        this.isAnalyzing = false; // 标记为分析完成
+      }
+    }
+
+    restoreOriginalBGUploadBtn() {
+      if (!bgUploadBtn || !this.originalBGUploadBtnHTML) return; // 如果元素不存在，直接返回
+
+      bgUploadBtn.innerHTML = this.originalBGUploadBtnHTML; // 恢复原始HTML
+      this.refreshAdaptableElements(); // 刷新可适应元素
+      this.analyzeAndAdapt(); // 重新分析并适应
+    }
+
+    destroy() {
+      if (this.updateInterval) {
+        clearInterval(this.updateInterval); // 清除定时器
+      }
+    }
+
+    refreshAdaptableElements() {
+      this.elementsToAdapt = []; // 清空元素列表
+      this.collectAdaptableElements(); // 重新收集元素
+    }
+  }
+
+  const colorAdapter = new EnhancedBackgroundColorAdapter(); // 创建颜色适应器实例
+  const layoutManager = new KeyboardLayoutManager(); // 创建键盘布局管理器实例
+
+  // ========== 简化版：IndexedDB 功能 ==========
+  function openBackgroundDB() {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open(DB_NAME, DB_VERSION); // 打开或创建IndexedDB数据库
+
+      request.onerror = (event) => {
+        console.error('IndexedDB打开失败:', event.target.error); // 输出错误信息
+        reject(event.target.error); // 拒绝Promise
+      };
+
+      request.onsuccess = (event) => {
+        db = event.target.result; // 获取数据库实例
+        console.log('IndexedDB连接成功'); // 输出成功信息
+        resolve(db); // 解析Promise
+      };
+
+      request.onupgradeneeded = (event) => {
+        const db = event.target.result; // 获取数据库实例
+
+        if (!db.objectStoreNames.contains(STORE_NAME)) {
+          const store = db.createObjectStore(STORE_NAME, {
+            keyPath: 'id', // 主键字段
+            autoIncrement: true // 自动递增
+          });
+
+          store.createIndex('timestamp', 'timestamp', { unique: false }); // 创建时间戳索引
+          console.log('背景存储对象空间创建成功'); // 输出成功信息
+        }
+      };
+    });
+  }
+
+  async function saveBackgroundToIndexedDB(file) {
+    return new Promise(async (resolve, reject) => {
+      if (!db) {
+        await openBackgroundDB(); // 如果数据库未连接，先连接
+      }
+
+      const backgroundData = {
+        blob: file, // 文件Blob对象
+        name: file.name, // 文件名
+        type: file.type, // 文件类型
+        size: file.size, // 文件大小
+        timestamp: Date.now() // 时间戳
+      };
+
+      const transaction = db.transaction([STORE_NAME], 'readwrite'); // 创建事务
+      const store = transaction.objectStore(STORE_NAME); // 获取对象存储
+
+      store.clear(); // 清空存储（只保存一张图片）
+
+      const request = store.add(backgroundData); // 添加数据
+
+      request.onsuccess = (event) => {
+        const id = event.target.result; // 获取生成的ID
+        console.log(`背景图片保存成功，ID: ${id}，大小: ${(file.size / 1024 / 1024).toFixed(2)} MB`); // 输出成功信息
+        resolve(id); // 解析Promise
+      };
+
+      request.onerror = (event) => {
+        console.error('保存失败:', event.target.error); // 输出错误信息
+        reject(event.target.error); // 拒绝Promise
+      };
+
+      transaction.oncomplete = () => {
+        console.log('背景保存事务完成'); // 输出完成信息
+      };
+    });
+  }
+
+  async function loadBackgroundFromIndexedDB() {
+    return new Promise(async (resolve, reject) => {
+      if (!db) {
+        try {
+          await openBackgroundDB(); // 如果数据库未连接，先连接
+        } catch (error) {
+          resolve(null); // 如果连接失败，返回null
+          return;
+        }
+      }
+
+      const transaction = db.transaction([STORE_NAME], 'readonly'); // 创建只读事务
+      const store = transaction.objectStore(STORE_NAME); // 获取对象存储
+
+      const index = store.index('timestamp'); // 获取时间戳索引
+      const cursorRequest = index.openCursor(null, 'prev'); // 打开游标，按时间倒序
+
+      cursorRequest.onsuccess = (event) => {
+        const cursor = event.target.result; // 获取游标
+        if (cursor) {
+          const data = cursor.value; // 获取数据
+          const blobUrl = URL.createObjectURL(data.blob); // 创建Blob URL
+          resolve({
+            url: blobUrl, // 返回URL
+            data: data // 返回原始数据
+          });
+        } else {
+          resolve(null); // 没有数据，返回null
+        }
+      };
+
+      cursorRequest.onerror = (event) => {
+        console.error('读取失败:', event.target.error); // 输出错误信息
+        reject(event.target.error); // 拒绝Promise
+      };
+    });
+  }
+
+  // === 网络状态检测 ===
+  async function checkNetwork() {
+    updateNetworkIndicator('checking', '正在检测网络...'); // 更新网络状态指示器为检测中
+
+    try {
+      const controller = new AbortController(); // 创建AbortController
+      const timeoutId = setTimeout(() => controller.abort(), 1500); // 设置超时
+
+      const test = await fetch('https://www.baidu.com/favicon.ico?t=' + Date.now(), {
+        mode: 'no-cors', // 无CORS模式
+        signal: controller.signal // 使用AbortController信号
+      });
+
+      clearTimeout(timeoutId); // 清除超时
+      isOnline = true; // 设置在线状态
+      updateNetworkIndicator('online', '✓ 已连接网络，将尝试获取实时搜索建议'); // 更新网络状态指示器为在线
+      return true; // 返回成功
+    } catch (e) {
+      isOnline = false; // 设置离线状态
+      updateNetworkIndicator('offline', '✗ 网络未连接，使用离线建议'); // 更新网络状态指示器为离线
+      return false; // 返回失败
+    }
+  }
+
+  function updateNetworkIndicator(state, message) {
+    networkIndicator.classList.remove('online', 'offline', 'warning', 'checking'); // 移除所有状态类
+    networkIndicator.classList.add(state); // 添加当前状态类
+
+    // 隐藏所有图标
+    document.querySelectorAll('.network-icon').forEach(icon => {
+      icon.style.display = 'none';
+    });
+
+    let iconToShow; // 要显示的图标
+    switch(state) {
+      case 'online':
+        iconToShow = document.querySelector('.online-icon'); // 在线图标
+        break;
+      case 'offline':
+        iconToShow = document.querySelector('.offline-icon'); // 离线图标
+        break;
+      case 'warning':
+        iconToShow = document.querySelector('.warning-icon'); // 警告图标
+        break;
+      case 'checking':
+        iconToShow = document.querySelector('.checking-icon'); // 检测中图标
+        break;
+    }
+
+    if (iconToShow) {
+      iconToShow.style.display = 'block'; // 显示对应图标
+    }
+
+    networkTooltip.textContent = message; // 更新工具提示文字
+    networkIndicator.title = message; // 更新标题
+
+    if (colorAdapter.initialized) {
+      colorAdapter.analyzeAndAdapt(); // 如果颜色适应器已初始化，重新分析并适应
+    }
+  }
+
+  // ========== 简化版：JSONP跨域请求功能 ==========
+  function fetchSuggestionsViaJSONP(query, engine) {
+    return new Promise((resolve, reject) => {
+      if (!query.trim() || query.length < 1) {
+        resolve([]); // 如果查询为空，返回空数组
+        return;
+      }
+
+      const jsonpConfig = CONFIG.jsonpConfigs[engine]; // 获取对应引擎的JSONP配置
+      if (!jsonpConfig) {
+        reject(new Error(`不支持 ${engine} 的JSONP请求`)); // 如果不支持，拒绝Promise
+        return;
+      }
+
+      jsonpCallbackCounter++; // 递增回调计数器
+      const callbackName = `jsonpCallback_${Date.now()}_${jsonpCallbackCounter}`; // 生成唯一的回调函数名
+
+      const encodedQuery = encodeURIComponent(query); // 编码查询词
+
+      let requestUrl; // 请求URL
+      if (engine === 'bing' || engine === 'duckduckgo') {
+        requestUrl = jsonpConfig.url(encodedQuery); // 对于Bing和DuckDuckGo，使用普通URL
+      } else {
+        requestUrl = jsonpConfig.url(encodedQuery) + callbackName; // 对于其他引擎，添加回调函数名
+      }
+
+      const timeoutId = setTimeout(() => {
+        cleanup(); // 清理资源
+        reject(new Error(`JSONP请求超时 (${engine})`)); // 超时拒绝
+      }, 10000); // 10秒超时
+
+      // 定义JSONP回调函数
+      window[callbackName] = function(data) {
+        clearTimeout(timeoutId); // 清除超时
+        cleanup(); // 清理资源
+
+        try {
+          const suggestions = jsonpConfig.extractData(data); // 提取建议数据
+          console.log(`[JSONP成功] ${engine} 返回 ${suggestions.length} 条建议`); // 输出成功信息
+          resolve(suggestions); // 解析Promise
+        } catch (error) {
+          console.error(`[JSONP错误] ${engine} 数据解析失败:`, error); // 输出错误信息
+          reject(new Error(`JSONP数据解析失败: ${error.message}`)); // 拒绝Promise
+        }
+      };
+
+      const script = document.createElement('script'); // 创建script元素
+      script.dataset.engine = engine; // 设置引擎数据属性
+      script.dataset.callback = callbackName; // 设置回调数据属性
+
+      // 处理Bing和DuckDuckGo的特殊情况
+      if (engine === 'bing' || engine === 'duckduckgo') {
+        script.src = requestUrl; // 设置script的src
+        script.type = 'application/json'; // 设置类型为JSON
+
+        script.onload = function() {
+          try {
+            // 使用fetch获取数据（因为script标签可能无法正确加载JSON）
+            fetch(requestUrl)
+                    .then(response => {
+                      if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`); // 如果响应不OK，抛出错误
+                      }
+                      return response.text(); // 返回响应文本
+                    })
+                    .then(text => {
+                      try {
+                        const data = JSON.parse(text); // 解析JSON
+
+                        clearTimeout(timeoutId); // 清除超时
+                        cleanup(); // 清理资源
+
+                        try {
+                          const suggestions = jsonpConfig.extractData(data); // 提取建议数据
+                          console.log(`[JSONP成功-修复版] ${engine} 返回 ${suggestions.length} 条建议`); // 输出成功信息
+                          resolve(suggestions); // 解析Promise
+                        } catch (error) {
+                          console.error(`[JSONP错误-修复版] ${engine} 数据解析失败:`, error); // 输出错误信息
+                          reject(new Error(`JSONP数据解析失败: ${error.message}`)); // 拒绝Promise
+                        }
+                      } catch (parseError) {
+                        clearTimeout(timeoutId); // 清除超时
+                        cleanup(); // 清理资源
+                        reject(new Error(`JSON解析失败: ${parseError.message}`)); // 拒绝Promise
+                      }
+                    })
+                    .catch(fetchError => {
+                      clearTimeout(timeoutId); // 清除超时
+                      cleanup(); // 清理资源
+                      reject(new Error(`fetch请求失败: ${fetchError.message}`)); // 拒绝Promise
+                    });
+          } catch (error) {
+            clearTimeout(timeoutId); // 清除超时
+            cleanup(); // 清理资源
+            reject(new Error(`处理请求失败: ${error.message}`)); // 拒绝Promise
+          }
+        };
+      } else {
+        script.src = requestUrl; // 设置script的src
+      }
+
+      script.onerror = function() {
+        clearTimeout(timeoutId); // 清除超时
+        cleanup(); // 清理资源
+        reject(new Error(`JSONP请求失败 (${engine})`)); // 拒绝Promise
+      };
+
+      // 清理函数
+      function cleanup() {
+        if (script.parentNode) {
+          document.body.removeChild(script); // 移除script元素
+        }
+        delete window[callbackName]; // 删除回调函数
+      }
+
+      document.body.appendChild(script); // 添加script元素到body
+    });
+  }
+
+  // ========== 记忆上次使用的搜索引擎 ==========
+  function saveEnginePreference(engine) {
+    try {
+      localStorage.setItem('preferredSearchEngine', engine); // 保存到localStorage
+      console.log(`已保存搜索引擎偏好: ${engine}`); // 输出成功信息
+    } catch (error) {
+      console.warn('无法保存搜索引擎偏好到localStorage:', error); // 输出警告信息
+    }
+  }
+
+  function loadEnginePreference() {
+    try {
+      const savedEngine = localStorage.getItem('preferredSearchEngine'); // 从localStorage读取
+      if (savedEngine && CONFIG.engines[savedEngine]) {
+        return savedEngine; // 返回保存的引擎
+      }
+    } catch (error) {
+      console.warn('无法从localStorage读取搜索引擎偏好:', error); // 输出警告信息
+    }
+    return 'baidu'; // 默认返回百度
+  }
+
+  // ========== 横向竞速 - 跨搜索引擎竞速 ==========
+  async function raceSearchEngines(query) {
+    if (!query.trim() || query.length < 1) return []; // 如果查询为空，返回空数组
+
+    cancelAllRaces(); // 取消所有正在进行的竞速请求
+
+    const engines = ['baidu', 'bing', 'google', 'duckduckgo']; // 参与竞速的引擎列表
+    const racePromises = []; // 竞速Promise数组
+    raceStartTime = Date.now(); // 记录竞速开始时间
+
+    // 为每个引擎创建竞速请求
+    engines.forEach(engine => {
+      const controller = new AbortController(); // 创建AbortController
+      raceControllers.set(engine, controller); // 存储到Map中
+
+      const racePromise = fetchSuggestionsForEngine(query, engine, controller.signal) // 获取建议
+              .then(suggestions => ({
+                engine, // 引擎名称
+                suggestions, // 建议列表
+                time: Date.now() - raceStartTime // 耗时
+              }))
+              .catch(error => {
+                console.warn(`[横向竞速] ${engine} 请求失败:`, error.message); // 输出警告信息
+                return Promise.reject(error); // 拒绝Promise
+              });
+
+      racePromises.push(racePromise); // 添加到Promise数组
+    });
+
+    try {
+      // 等待任意一个引擎返回结果
+      const result = await Promise.any(racePromises);
+
+      cancelAllRaces(); // 取消所有请求（只保留最快的）
+
+      fastestEngine = result.engine; // 记录最快的引擎
+
+      console.log(`[横向竞速成功] ${result.engine} 获胜，耗时 ${result.time}ms，返回 ${result.suggestions.length} 条建议`); // 输出成功信息
+
+      updateNetworkIndicator('online', `✓ 在线 (${CONFIG.engines[result.engine].name} 最快，${result.time}ms)`); // 更新网络状态指示器
+
+      return result.suggestions; // 返回建议列表
+    } catch (error) {
+      console.warn('[横向竞速失败] 所有搜索引擎均无响应'); // 输出警告信息
+      updateNetworkIndicator('warning', '⚠ 所有搜索引擎请求失败，使用离线建议'); // 更新网络状态指示器
+
+      isOnline = false; // 设置为离线状态
+      return getOfflineSuggestions(query); // 返回离线建议
+    }
+  }
+
+  function cancelAllRaces() {
+    raceControllers.forEach(controller => {
+      if (!controller.signal.aborted) {
+        controller.abort(); // 中止请求
+      }
+    });
+    raceControllers.clear(); // 清空Map
+  }
+
+  async function fetchSuggestionsForEngine(query, engine, signal) {
+    if (!query.trim() || query.length < 1) return []; // 如果查询为空，返回空数组
+
+    const originalApiUrl = CONFIG.originalSuggestAPI[engine](encodeURIComponent(query)); // 构建原始API URL
+    const startTime = Date.now(); // 记录开始时间
+
+    // 创建代理请求Promise数组
+    const proxyPromises = CONFIG.onlineProxies.map(proxy => {
+      const controller = new AbortController(); // 创建AbortController
+      const timeoutId = setTimeout(() => controller.abort(), 8000); // 设置8秒超时
+
+      const fetchPromise = fetch(proxy.buildUrl(originalApiUrl), {
+        signal: controller.signal // 使用AbortController信号
+      })
+              .then(response => {
+                clearTimeout(timeoutId); // 清除超时
+                if (!response.ok) {
+                  return Promise.reject(new Error(`代理 ${proxy.name} 响应错误: ${response.status}`)); // 如果响应不OK，拒绝Promise
+                }
+                return response.json().then(data => ({ proxy, data, type: 'proxy' })); // 返回JSON数据
+              })
+              .catch(error => {
+                clearTimeout(timeoutId); // 清除超时
+                return Promise.reject({ proxy: proxy.name, error: error.message, type: 'proxy' }); // 拒绝Promise
+              });
+
+      return { proxy, fetchPromise, controller, type: 'proxy' }; // 返回代理信息
+    });
+
+    // 创建JSONP请求Promise
+    const jsonpPromise = fetchSuggestionsViaJSONP(query, engine)
+            .then(suggestions => ({
+              proxy: { name: 'JSONP' }, // 代理名称
+              data: suggestions, // 数据
+              type: 'jsonp' // 类型为JSONP
+            }))
+            .catch(error => {
+              console.warn(`[JSONP失败] ${engine}:`, error.message); // 输出警告信息
+              return Promise.reject({ proxy: 'JSONP', error: error.message, type: 'jsonp' }); // 拒绝Promise
+            });
+
+    const allPromises = [...proxyPromises.map(p => p.fetchPromise), jsonpPromise]; // 合并所有Promise
+
+    try {
+      console.log(`[引擎竞速开始] ${engine} 为"${query}"请求建议...`); // 输出开始信息
+      const result = await Promise.any(allPromises); // 等待任意一个请求完成
+
+      // 中止其他请求
+      proxyPromises.forEach(item => {
+        if (!item.controller.signal.aborted) {
+          item.controller.abort(); // 中止请求
+        }
+      });
+
+      let suggestions; // 建议列表
+      if (result.type === 'jsonp') {
+        suggestions = result.data; // JSONP返回的直接是建议列表
+      } else {
+        const processedData = result.proxy.processData(result.data); // 处理代理返回的数据
+        suggestions = extractSuggestions(processedData, engine); // 提取建议
+      }
+
+      if (suggestions && suggestions.length > 0) {
+        const elapsedTime = Date.now() - startTime; // 计算耗时
+        console.log(`[引擎竞速成功] ${engine} 通过 ${result.proxy.name} (${result.type}) 返回 ${suggestions.length} 条建议，耗时 ${elapsedTime}ms`); // 输出成功信息
+        return suggestions; // 返回建议列表
+      } else {
+        throw new Error(`${result.proxy.name} (${result.type}) 返回的建议为空`); // 抛出错误
+      }
+
+    } catch (error) {
+      const elapsedTime = Date.now() - startTime; // 计算耗时
+      console.warn(`[引擎竞速失败] ${engine} 所有请求均失败，耗时 ${elapsedTime}ms`); // 输出警告信息
+      throw new Error(`${engine} 所有请求均失败`); // 抛出错误
+    }
+  }
+
+  // 关键修改点3：修复extractSuggestions函数中的DuckDuckGo处理逻辑
+  function extractSuggestions(data, engine) {
+    let suggestions = []; // 初始化建议数组
+    if (engine === 'baidu' && data.g) {
+      // 百度返回格式：{g: [{q: '建议1'}, {q: '建议2'}, ...]}
+      suggestions = data.g.map(item => item.q).slice(0, 8); // 提取前8个建议
+    } else if ((engine === 'bing' || engine === 'google') && Array.isArray(data) && data.length > 1) {
+      // Bing和Google返回格式：["查询词", ["建议1", "建议2", ...]]
+      suggestions = data[1].slice(0, 8); // 提取前8个建议
+    } else if (engine === 'duckduckgo') {
+      // DuckDuckGo返回格式处理
+      if (Array.isArray(data) && data.length >= 2 && Array.isArray(data[1])) {
+        // 标准格式：["查询词", ["建议1", "建议2", ...]]
+        suggestions = data[1].slice(0, 8); // 提取前8个建议
+      } else if (Array.isArray(data)) {
+        // 备用格式：对象数组，每个对象有phrase属性
+        suggestions = data.map(item => item.phrase || item).slice(0, 8); // 提取前8个建议
+      }
+    }
+    return suggestions; // 返回建议数组
+  }
+
+  function getOfflineSuggestions(query) {
+    // 生成离线建议：查询词 + 常见后缀
+    const offlineSuggestions = CONFIG.offlineFallbacks.map(suffix => `${query} ${suffix}`);
+    if (query.length > 2) {
+      const relatedTerms = ['最新消息', '价格对比', '用户评价', '使用技巧', '官方下载', '视频教程']; // 相关术语
+      const randomTerm = relatedTerms[Math.floor(Math.random() * relatedTerms.length)]; // 随机选择一个术语
+      offlineSuggestions.push(`${query} ${randomTerm}`); // 添加到建议列表
+    }
+    return offlineSuggestions.slice(0, 8); // 返回前8个建议
+  }
+
+  // ========== 竞速状态显示优化 ==========
+  function updateRaceStatus(engine, time) {
+    if (!raceStatusContainer) return; // 如果竞速状态容器不存在，直接返回
+
+    const engineConfig = CONFIG.engines[engine]; // 获取引擎配置
+    if (!engineConfig) return; // 如果配置不存在，直接返回
+
+    raceStatusContainer.innerHTML = ''; // 清空容器内容
+
+    // 构建状态HTML
+    const statusHTML = `
+      <div class="race-status-content">
+        <svg class="race-status-icon" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+        </svg>
+        <span class="race-status-text">建议来自</span>
+        <div class="race-engine-badge" style="background-color: ${engineConfig.color}20; color: ${engineConfig.color}ee;">
+          <svg class="badge-icon" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/>
+          </svg>
+          ${engineConfig.shortName}（${time}ms）
+        </div>
+      </div>
+    `;
+
+    raceStatusContainer.innerHTML = statusHTML; // 设置HTML内容
+    raceStatusContainer.classList.add('show'); // 显示容器
+  }
+
+  function hideRaceStatus() {
+    if (raceStatusContainer) {
+      raceStatusContainer.classList.remove('show'); // 隐藏容器
+      raceStatusContainer.innerHTML = ''; // 清空内容
+    }
+  }
+
+  function showOfflineStatus() {
+    if (!raceStatusContainer) return; // 如果容器不存在，直接返回
+
+    // 构建离线状态HTML
+    raceStatusContainer.innerHTML = `
+      <div class="race-status-content">
+        <svg class="race-status-icon" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+        </svg>
+        <span class="race-status-text">离线模式 - 使用本地建议</span>
+      </div>
+    `;
+    raceStatusContainer.classList.add('show'); // 显示容器
+  }
+
+  // ========== 简化版：智能触摸事件处理（已修复iOS重复打开标签页问题）==========
+  // 修改点1：修复iOS重复打开标签页问题的关键修改 - 简化触摸事件处理
+  // 统一使用click事件，避免触摸和鼠标事件冲突
+  function setupSuggestionItemClickHandler(item, suggestion) {
+    // 为每个建议项绑定统一的click事件处理器
+    const handleSuggestionClick = function(e) {
+      e.preventDefault(); // 阻止默认行为，防止可能的默认点击行为
+      e.stopPropagation(); // 停止事件冒泡，防止事件传播到父元素
+
+      // 从数据属性获取建议内容
+      const suggestion = this.dataset.suggestion; // 从数据属性获取建议内容
+      if (suggestion) {
+        searchInput.value = suggestion; // 将建议内容设置到搜索输入框
+        performSearch(); // 执行搜索
+      }
+      return false; // 返回false进一步阻止默认行为
+    };
+
+    // 只为每个建议项绑定一次click事件（使用once选项确保只触发一次）
+    item.addEventListener('click', handleSuggestionClick, {
+      passive: false, // 需要preventDefault所以不能使用passive
+      once: false // 不使用once，因为建议项可能被重复使用
+    });
+
+    // 同时设置数据属性，供事件处理器使用
+    item.dataset.suggestion = suggestion; // 将建议内容存储到数据属性中
+  }
+
+  // ========== 简化版：焦点状态管理 ==========
+  function handleSearchFocus() {
+    document.body.classList.add('search-focused'); // 添加搜索聚焦类
+    searchWrapper.classList.add('focused'); // 添加搜索包装器聚焦类
+    backgroundContainer.classList.add('blurred'); // 添加背景模糊类
+
+    layoutManager.updateSuggestionsHeight(); // 更新建议框高度
+
+    if (searchInput.value.trim()) {
+      updateSuggestions(); // 如果输入框有内容，更新建议
+    }
+  }
+
+  function handleSearchBlur() {
+    setTimeout(() => {
+      const activeElement = document.activeElement; // 获取当前焦点元素
+      // 如果焦点不在搜索输入框和建议框内
+      if (activeElement !== searchInput && !suggestionsBox.contains(activeElement)) {
+        document.body.classList.remove('search-focused'); // 移除搜索聚焦类
+        searchWrapper.classList.remove('focused'); // 移除搜索包装器聚焦类
+        backgroundContainer.classList.remove('blurred'); // 移除背景模糊类
+        suggestionsBox.classList.remove('show'); // 隐藏建议框
+        hideRaceStatus(); // 隐藏竞速状态
+      }
+    }, 200); // 延迟200ms处理（防止点击建议项时立即隐藏）
+  }
+
+  // ========== 简化版：更新建议（已修复iOS重复打开标签页问题）==========
+  async function updateSuggestions() {
+    const query = searchInput.value.trim(); // 获取搜索词并去除首尾空格
+    suggestionsBox.classList.remove('show'); // 隐藏建议框
+    hideRaceStatus(); // 隐藏竞速状态
+
+    if (!query) {
+      suggestionsContent.innerHTML = ''; // 清空建议内容
+      return; // 直接返回
+    }
+
+    // 显示加载状态
+    suggestionsContent.innerHTML = `
+      <div class="suggestion-item">
+        <div class="loading-dots">
+          <span></span>
+          <span></span>
+          <span></span>
+        </div>
+        <span class="suggestion-text">正在从多个搜索引擎获取最快建议...</span>
+      </div>
+    `;
+    suggestionsBox.classList.add('show'); // 显示建议框
+
+    layoutManager.updateSuggestionsHeight(); // 更新建议框高度
+
+    let suggestions = []; // 初始化建议数组
+
+    if (isOnline) {
+      try {
+        suggestions = await raceSearchEngines(query); // 竞速获取建议
+
+        if (fastestEngine) {
+          const resultTime = Date.now() - raceStartTime; // 计算耗时
+          updateRaceStatus(fastestEngine, resultTime); // 更新竞速状态
+        }
+      } catch (error) {
+        suggestions = getOfflineSuggestions(query); // 获取离线建议
+        showOfflineStatus(); // 显示离线状态
+      }
+    } else {
+      suggestions = getOfflineSuggestions(query); // 获取离线建议
+      showOfflineStatus(); // 显示离线状态
+    }
+
+    suggestionsContent.innerHTML = ''; // 清空建议内容
+
+    if (suggestions.length === 0) {
+      // 没有建议时显示提示
+      suggestionsContent.innerHTML = '<div class="no-suggestions">未找到相关建议</div>';
+    } else {
+      // 修改点4：修复updateSuggestions函数中的事件绑定逻辑
+      // 遍历所有建议并创建DOM元素
+      suggestions.forEach(suggestion => {
+        const item = document.createElement('div'); // 创建建议项元素
+        item.className = 'suggestion-item'; // 设置类名
+        item.innerHTML = `
+          <svg class="suggestion-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="11" cy="11" r="8" stroke="currentColor" stroke-width="2"/>
+            <path d="M16.5 16.5L21 21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          <span class="suggestion-text">${suggestion}</span>
+        `;
+
+        // 为建议项绑定点击事件处理
+        setupSuggestionItemClickHandler(item, suggestion); // 使用统一的点击事件处理器
+
+        suggestionsContent.appendChild(item); // 添加到建议内容容器
+      });
+    }
+
+    layoutManager.updateSuggestionsHeight(); // 更新建议框高度
+  }
+
+  // ========== 执行搜索（已添加防重复触发机制）==========
+  function performSearch() {
+    // 防重复触发检查 - 防止iOS上重复打开标签页
+    if (window._searchPerforming) {
+      return; // 如果已经在执行搜索，直接返回，防止重复触发
+    }
+
+    window._searchPerforming = true; // 设置搜索执行标志
+
+    const query = searchInput.value.trim(); // 获取搜索词并去除首尾空格
+    if (!query) {
+      window._searchPerforming = false; // 重置搜索执行标志
+      return; // 如果搜索词为空，直接返回
+    }
+
+    const engine = CONFIG.engines[currentEngine]; // 获取当前引擎配置
+    const searchUrl = engine.url + encodeURIComponent(query); // 构建搜索URL
+
+    // 使用setTimeout避免iOS的快速连续触发
+    setTimeout(() => {
+      window.open(searchUrl, '_blank'); // 在新标签页打开搜索
+
+      suggestionsBox.classList.remove('show'); // 隐藏建议框
+      searchWrapper.classList.remove('focused'); // 移除搜索包装器聚焦类
+      backgroundContainer.classList.remove('blurred'); // 移除背景模糊类
+      document.body.classList.remove('search-focused'); // 移除搜索聚焦类
+      hideRaceStatus(); // 隐藏竞速状态
+
+      // 重置防重复标志（使用延迟确保不会立即响应下一个点击）
+      setTimeout(() => {
+        window._searchPerforming = false; // 重置搜索执行标志
+      }, 500); // 500毫秒延迟，足够防止iOS上的双击或快速点击
+    }, 800); // 800毫秒延迟，确保事件处理完成
+  }
+
+  // ========== 初始化事件监听器 ==========
+  function initEventListeners() {
+    // 搜索输入框焦点事件
+    searchInput.addEventListener('focus', handleSearchFocus);
+    searchInput.addEventListener('blur', handleSearchBlur);
+
+    // 搜索输入框输入事件
+    searchInput.addEventListener('input', () => {
+      clearTimeout(window.suggestTimeout); // 清除之前的定时器
+      window.suggestTimeout = setTimeout(updateSuggestions, 200); // 设置新的定时器（防抖）
+
+      if (colorAdapter.initialized) {
+        colorAdapter.analyzeAndAdapt(); // 如果颜色适应器已初始化，重新分析并适应
+      }
+    });
+
+    // 搜索输入框按键事件
+    searchInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') performSearch(); // 回车键执行搜索
+    });
+
+    // 搜索按钮点击事件
+    searchBtn.addEventListener('click', performSearch);
+
+    // 搜索引擎按钮点击事件
+    engineBtns.forEach(btn => {
+      btn.addEventListener('click', function() {
+        engineBtns.forEach(b => b.classList.remove('active')); // 移除所有按钮的激活状态
+        this.classList.add('active'); // 添加当前按钮的激活状态
+        currentEngine = this.dataset.engine; // 更新当前引擎
+
+        saveEnginePreference(currentEngine); // 保存引擎偏好
+
+        searchBtn.style.backgroundColor = CONFIG.engines[currentEngine].color; // 更新搜索按钮颜色
+        if (searchInput.value.trim()) updateSuggestions(); // 如果输入框有内容，更新建议
+      });
+    });
+
+    // 背景文件输入框变化事件
+    bgFileInput.addEventListener('change', async function(event) {
+      const file = event.target.files[0]; // 获取选择的文件
+      if (!file) return; // 如果没有文件，直接返回
+
+      if (!file.type.startsWith('image/')) {
+        alert('请选择图片文件'); // 提示用户选择图片文件
+        return;
+      }
+
+      const fileSizeMB = (file.size / 1024 / 1024).toFixed(2); // 计算文件大小（MB）
+      console.log(`选择的背景图片大小: ${fileSizeMB} MB`); // 输出文件大小
+
+      try {
+        await saveBackgroundToIndexedDB(file); // 保存到IndexedDB
+
+        const bgData = await loadBackgroundFromIndexedDB(); // 从IndexedDB加载
+        if (bgData) {
+          backgroundImage.src = bgData.url; // 设置背景图片源
+          backgroundImage.style.display = 'block'; // 显示背景图片
+          defaultBackground.style.display = 'none'; // 隐藏默认背景
+          backgroundImageSet = true; // 标记已设置背景图片
+
+          const originalHTML = bgUploadBtn.innerHTML; // 保存原始HTML
+
+          // 临时显示成功消息
+          bgUploadBtn.innerHTML = `
+            <svg class="engine-icon" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path d="M9 16.17L4.83 12L3.41 13.41L9 19L21 7L19.59 5.59L9 16.17Z" fill="white"/>
+            </svg>
+            背景已设置 (${fileSizeMB}MB)
+          `;
+
+          // 2秒后恢复原始HTML
+          setTimeout(() => {
+            bgUploadBtn.innerHTML = originalHTML;
+            colorAdapter.restoreOriginalBGUploadBtn(); // 恢复原始背景上传按钮
+          }, 2000);
+
+          console.log(`背景图片已保存到IndexedDB: ${file.name} (${fileSizeMB} MB)`); // 输出成功信息
+
+          // 图片加载完成后重新分析并适应颜色
+          if (backgroundImage.complete) {
+            setTimeout(() => colorAdapter.analyzeAndAdapt(), 100);
+          } else {
+            backgroundImage.addEventListener('load', () => {
+              setTimeout(() => colorAdapter.analyzeAndAdapt(), 100);
+            }, { once: true }); // 只执行一次
+          }
+        }
+      } catch (error) {
+        console.error('背景设置失败:', error); // 输出错误信息
+        alert('背景设置失败，请重试'); // 提示用户
+        colorAdapter.restoreOriginalBGUploadBtn(); // 恢复原始背景上传按钮
+      }
+    });
+
+    // 文档点击事件（点击其他地方隐藏建议框）
+    document.addEventListener('click', function(e) {
+      if (!searchWrapper.contains(e.target) && !suggestionsBox.contains(e.target)) {
+        suggestionsBox.classList.remove('show'); // 隐藏建议框
+        hideRaceStatus(); // 隐藏竞速状态
+      }
+    });
+  }
+
+  // === 简化初始化 ===
+  async function init() {
+    console.log('正在初始化Infinite Glass Tab...'); // 输出初始化开始信息
+
+    suggestionsContent = document.getElementById('suggestions-content'); // 获取建议内容容器
+    raceStatusContainer = document.getElementById('race-status-container'); // 获取竞速状态容器
+
+    await checkNetwork(); // 检查网络状态
+
+    try {
+      await openBackgroundDB(); // 打开IndexedDB
+      const bgData = await loadBackgroundFromIndexedDB(); // 加载背景图片
+      if (bgData) {
+        backgroundImage.src = bgData.url; // 设置背景图片源
+        backgroundImage.style.display = 'block'; /* 显示背景图片 */
+        defaultBackground.style.display = 'none'; /* 隐藏默认背景 */
+        backgroundImageSet = true; /* 标记已设置背景图片 */
+        const fileSizeMB = (bgData.data.size / 1024 / 1024).toFixed(2); /* 计算文件大小 */
+        console.log(`已加载保存的背景图片: ${bgData.data.name} (${fileSizeMB} MB)`); /* 输出加载信息 */
+      }
+    } catch (error) {
+      console.warn('IndexedDB初始化失败或没有保存的背景:', error); /* 输出警告信息 */
+    }
+
+    currentEngine = loadEnginePreference(); /* 加载引擎偏好 */
+
+    // 设置激活的搜索引擎按钮
+    engineBtns.forEach(btn => {
+      btn.classList.remove('active'); /* 移除激活状态 */
+      if (btn.dataset.engine === currentEngine) {
+        btn.classList.add('active'); /* 添加激活状态 */
+      }
+    });
+
+    searchBtn.style.backgroundColor = CONFIG.engines[currentEngine].color; /* 设置搜索按钮颜色 */
+
+    initEventListeners(); /* 初始化事件监听器 */
+
+    setTimeout(() => {
+      colorAdapter.initialize(); /* 初始化颜色适应器 */
+    }, 100);
+
+    setInterval(checkNetwork, 15000); /* 每15秒检查一次网络状态 */
+
+    console.log('初始化完成，当前模式:', isOnline ? '在线' : '离线'); /* 输出初始化完成信息 */
+    console.log('记忆的搜索引擎:', currentEngine);
+    console.log('键盘布局管理器已启用');
+    console.log('搜索框和引擎按钮同步上移，控制按钮向左隐藏');
+    console.log('继承第九界面的设计：1.1倍聚焦放大动画 + 三层阴影效果');
+    console.log('iOS设备特殊优化：搜索框聚焦时上移距离调整为iPhone: 115px, iPad: 125px');
+    console.log('iOS重复打开标签页问题已修复：使用统一click事件+防重复触发机制');
+  }
+
+  // 当DOM加载完成后执行初始化
+  document.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>
