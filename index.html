@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <!-- 设置视口，确保在移动设备上正确缩放 -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-  <title>Infinite Glass Tab(v33)</title>
+  <title>Infinite Glass Tab(v41)</title>
   <style>
     /* ========== CSS变量定义 ========== */
     /* 定义可重用的CSS变量，方便全局管理和维护 */
@@ -36,7 +36,7 @@
       backface-visibility: hidden; /* GPU加速优化 */
     }
 
-    /* 页面主体样式 - 修复键盘弹出问题 */
+    /* ==========【修复点1】页面主体样式 - 用 fixed 定位锁定布局，彻底避免键盘弹出时的视口高度变化导致居中重算 ========== */
     html, body {
       height: 100%; /* html和body都设置100%高度 */
       width: 100%;
@@ -44,16 +44,20 @@
     }
 
     body {
-      position: relative; /* 改为相对定位 */
+      /* 【修复】从 position: relative 改为 position: fixed — 这样键盘弹出时 WebView 尺寸变化不会触发 body 的 justify-content: center 重新计算 */
+      position: fixed; /* 【修复】固定定位，锁定在初始视口，不受 adjustResize 模式影响 */
+      top: 0;
+      left: 0;
       display: flex; /* 使用弹性布局 */
       flex-direction: column; /* 垂直方向排列 */
       justify-content: center; /* 垂直居中 */
       align-items: center; /* 水平居中 */
       padding: 20px; /* 内边距 */
       overflow-x: hidden; /* 隐藏水平溢出 */
+      overflow-y: hidden; /* 【修复】禁止垂直滚动，防止键盘弹出时产生意外滚动条 */
       transition: padding 1s var(--transition-ease); /* 内边距过渡动画 */
       transform: translateZ(0); /* GPU加速 */
-      min-height: 100%; /* 使用百分比而不是vh */
+      /* 【修复】min-height 100% 改为固定的 100% — fixed 定位下不需要 min-height */
       /*第二批注释will-change: padding;*/ /* 预知padding变化 */
     }
 
@@ -998,8 +1002,8 @@
       body {
         padding-bottom: var(--ios-safe-area-inset-bottom); /* 适配iOS安全区域 */
         padding-top: calc(var(--ios-safe-area-inset-top) + 20px); /* 适配iOS安全区域 */
-        height: 100%;
-        overflow: hidden; /* 防止整体页面滚动 */
+        /* 【修复】iOS 上 body 已经是 fixed + overflow:hidden，这里不再需要 overflow:hidden 的重复声明 */
+        /* height 和 overflow 由上方全局 body 定义统一控制 */
       }
 
       /* 防止在iOS上点击时出现灰色高亮 */
@@ -1145,11 +1149,9 @@
       transform: translateZ(0); /* GPU加速 */
     }
 
-    /* ========== 键盘检测辅助类 ========== */
-    /* 键盘显示时调整底部内边距 */
+    /* ==========【修复点2】键盘检测辅助类 - 不再需要了，保留空类以兼容可能的外部引用 ========== */
     .keyboard-visible {
-      /* 已经通过position: fixed和height: 100%解决，不需要额外调整 */
-      transition: all 0s var(--transition-ease); /* 过渡动画 */
+      /* 【修复】原来的 JS 会通过此类触发额外的布局调整，现在已移除相关 JS 逻辑，该类仅作标记用途 */
     }
   </style>
 </head>
@@ -1426,9 +1428,9 @@
   let isTouchDevice = false; // 是否为触摸设备
   let raceStatusContainer = null; // 竞速状态容器
 
-  // 新增：键盘状态跟踪
+  // 【修复点3】键盘状态跟踪 - 保留变量但简化逻辑
   let isKeyboardVisible = false; // 键盘是否可见
-  let windowHeight = window.innerHeight; // 窗口高度
+  let windowHeight = window.innerHeight; // 窗口高度（初始值，fixed 定位下不再动态变化）
 
   // ========== DOM 元素引用 ==========
   const searchInput = document.getElementById('search-input'); // 搜索输入框
@@ -1444,18 +1446,80 @@
   const networkIndicator = document.getElementById('network-indicator'); // 网络状态指示器
   const networkTooltip = document.getElementById('network-tooltip'); // 网络状态工具提示
 
-  // ========== 键盘布局管理器 ==========
+  /* ===== 修改点 A：新增缩略图生成函数 ===== */
+  /**
+   * 生成图片的缩略图（低分辨率 JPEG）
+   * @param {File} file - 原始图片文件
+   * @param {number} maxWidth - 缩略图最大宽度（像素），默认 200
+   * @param {number} quality - JPEG 压缩质量 0-1，默认 0.5
+   * @returns {Promise<Blob>} 缩略图 Blob
+   */
+  async function generateThumbnail(file, maxWidth = 200, quality = 0.5) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      let resolved = false;
+
+      img.onload = function() {
+        try {
+          // 计算缩略图尺寸，保持宽高比
+          const ratio = Math.min(maxWidth / img.width, 1);
+          const width = Math.round(img.width * ratio);
+          const height = Math.round(img.height * ratio);
+
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d', { willReadFrequently: false });
+
+          // 使用高质量缩放
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'high';
+          ctx.drawImage(img, 0, 0, width, height);
+
+          // 导出为 JPEG Blob
+          canvas.toBlob(function(blob) {
+            URL.revokeObjectURL(url);
+            if (blob) {
+              resolved = true;
+              resolve(blob);
+            } else {
+              reject(new Error('缩略图生成失败：toBlob 返回 null'));
+            }
+          }, 'image/jpeg', quality);
+        } catch (err) {
+          URL.revokeObjectURL(url);
+          reject(err);
+        }
+      };
+
+      img.onerror = function() {
+        URL.revokeObjectURL(url);
+        if (!resolved) {
+          reject(new Error('图片加载失败，无法生成缩略图'));
+        }
+      };
+
+      img.src = url;
+    });
+  }
+
+  // ==========【修复点4】键盘布局管理器 - 大幅简化，不再与浏览器原生行为冲突 ==========
+  // 原 KeyboardLayoutManager 在 adjustResize 模式下强行固定 body 高度，
+  // 导致 CSS fixed 布局 + JS 手动高度之间产生冲突，现简化为仅跟踪状态和更新建议框高度。
   class KeyboardLayoutManager {
     constructor() {
       this.isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent); // 检测是否为移动设备
       this.isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream; // 检测是否为iOS设备
       this.keyboardHeight = 0; // 键盘高度
-      this.originalBodyHeight = document.body.clientHeight; // 原始body高度
+      this.initialViewportHeight = window.innerHeight; // 【最终修复】记录初始视口高度，用于在 resize 中锁定 body 高度不被 adjustResize 改变
+      // 【最终修复·桌面端兼容】标记是否为 Android 设备，仅 Android 才锁定 body 高度
+      this.isAndroid = /Android/i.test(navigator.userAgent);
       this.setupEventListeners(); // 设置事件监听器
     }
 
     setupEventListeners() {
-      // 监听窗口大小变化
+      // 【修复】监听窗口大小变化 - 仅用于检测键盘状态和更新建议框高度，不再修改 body 样式
       window.addEventListener('resize', this.handleResize.bind(this));
 
       // iOS键盘检测
@@ -1480,16 +1544,21 @@
     handleResize() {
       const newHeight = window.innerHeight; // 获取新的窗口高度
 
-      // 检测键盘是否显示（窗口高度减少）
+      // 【修复】仅检测键盘是否显示，不再强制修改 body 的 height/overflow
       if (newHeight < windowHeight * 0.7) {
         this.keyboardHeight = windowHeight - newHeight; // 计算键盘高度
-        this.handleKeyboardShow(); // 处理键盘显示
+        this.handleKeyboardShow(); // 处理键盘显示（仅标记状态）
       } else {
         this.keyboardHeight = 0; // 重置键盘高度
-        this.handleKeyboardHide(); // 处理键盘隐藏
+        this.handleKeyboardHide(); // 处理键盘隐藏（仅标记状态）
       }
 
       windowHeight = newHeight; // 更新窗口高度
+      // 【最终修复·桌面端兼容】仅 Android 设备才锁定 body 高度，桌面端保持 CSS height: 100% 自适应浏览器窗口大小
+      // 原因：桌面端没有 adjustResize 问题，锁定高度反而会导致窗口大小改变时出现白边或内容溢出
+      if (this.isAndroid) {
+        document.body.style.height = this.initialViewportHeight + 'px';
+      }
       this.updateSuggestionsHeight(); // 更新建议框高度
     }
 
@@ -1513,57 +1582,20 @@
 
     handleKeyboardShow() {
       if (isKeyboardVisible) return; // 如果键盘已经可见，直接返回
-
       isKeyboardVisible = true; // 设置键盘可见状态
       document.body.classList.add('keyboard-visible'); // 添加键盘可见类
 
-      // 保存当前滚动位置
-      this.savedScrollTop = document.documentElement.scrollTop || document.body.scrollTop;
-
-      // 防止页面跳动 - 关键修改
-      document.body.style.height = `${this.originalBodyHeight}px`; // 固定body高度
-      document.body.style.overflow = 'hidden'; // 隐藏滚动条
-
-      // 滚动到输入框位置
-      if (this.isMobile) {
-        setTimeout(() => {
-          this.scrollToInput();
-        }, 300);
-      }
+      // 【修复】移除了强行固定 body 高度和 overflow 的代码
+      // 原来的 document.body.style.height = ... 和 document.body.style.overflow = 'hidden'
+      // 会与 CSS position:fixed 布局产生冲突，尤其在 Via 浏览器的 adjustResize 模式下
     }
 
     handleKeyboardHide() {
       if (!isKeyboardVisible) return; // 如果键盘不可见，直接返回
-
       isKeyboardVisible = false; // 设置键盘不可见状态
       document.body.classList.remove('keyboard-visible'); // 移除键盘可见类
 
-      // 恢复body样式
-      document.body.style.height = ''; // 恢复body高度
-      document.body.style.overflow = ''; // 恢复滚动条
-
-      // 恢复滚动位置
-      if (this.savedScrollTop !== undefined) {
-        setTimeout(() => {
-          window.scrollTo(0, this.savedScrollTop); // 滚动到保存的位置
-          this.savedScrollTop = undefined; // 清除保存的位置
-        }, 100);
-      }
-    }
-
-    scrollToInput() {
-      const inputRect = searchInput.getBoundingClientRect(); // 获取输入框位置信息
-      const viewportHeight = window.innerHeight; // 获取视口高度
-      const inputBottom = inputRect.bottom; // 获取输入框底部位置
-
-      // 如果输入框底部在视口下方，滚动到可见位置
-      if (inputBottom > viewportHeight) {
-        const scrollY = window.scrollY + (inputBottom - viewportHeight) + 10; // 计算滚动位置
-        window.scrollTo({
-          top: scrollY,
-          behavior: 'smooth' // 平滑滚动
-        });
-      }
+      // 【修复】移除了恢复 body 高度和 overflow 的代码，CSS fixed 定位已保证布局稳定
     }
 
     updateSuggestionsHeight() {
@@ -1698,16 +1730,18 @@
         }, 0);
       });
 
-      // 监听窗口滚动
+      // 监听窗口滚动 - 【性能优化】添加 passive: true 让浏览器更好优化滚动
       window.addEventListener('scroll', () => {
         if (!this.isAnalyzing) {
           requestAnimationFrame(() => this.analyzeAndAdapt()); // 在下一帧分析并适应
         }
-      });
+      }, { passive: true });
 
-      // 定期更新颜色适应
+      // 定期更新颜色适应 - 【性能优化】仅可见时运行
       this.updateInterval = setInterval(() => {
-        this.analyzeAndAdapt(); // 每3秒分析并适应一次
+        if (document.visibilityState === 'visible') {
+          this.analyzeAndAdapt(); // 仅在页面可见时执行
+        }
       }, 3000);
     }
 
@@ -1723,9 +1757,9 @@
           return this.lastBrightness; // 如果图片未加载完成，返回上次计算的亮度
         }
 
-        // 设置画布尺寸（限制最大尺寸以提高性能）
-        this.canvas.width = Math.min(backgroundImage.naturalWidth, 100);
-        this.canvas.height = Math.min(backgroundImage.naturalHeight, 100);
+        // 【性能优化】降低画布分辨率到64px，人眼感知亮度差异极小，显著减少计算量
+        this.canvas.width = Math.min(backgroundImage.naturalWidth, 64);
+        this.canvas.height = Math.min(backgroundImage.naturalHeight, 64);
 
         // 在画布上绘制背景图片
         this.ctx.drawImage(backgroundImage, 0, 0, this.canvas.width, this.canvas.height);
@@ -1945,44 +1979,72 @@
     });
   }
 
+  /* ===== 修改点 B：修改 saveBackgroundToIndexedDB，同时存储原图和缩略图 ===== */
   async function saveBackgroundToIndexedDB(file) {
     return new Promise(async (resolve, reject) => {
       if (!db) {
         await openBackgroundDB(); // 如果数据库未连接，先连接
       }
 
-      const backgroundData = {
-        blob: file, // 文件Blob对象
-        name: file.name, // 文件名
-        type: file.type, // 文件类型
-        size: file.size, // 文件大小
-        timestamp: Date.now() // 时间戳
-      };
+      try {
+        // 生成缩略图（最大宽度200px，JPEG质量0.5）
+        const thumbnailBlob = await generateThumbnail(file, 200, 0.5);
+        console.log(`缩略图生成成功，大小: ${(thumbnailBlob.size / 1024).toFixed(1)} KB`);
 
-      const transaction = db.transaction([STORE_NAME], 'readwrite'); // 创建事务
-      const store = transaction.objectStore(STORE_NAME); // 获取对象存储
+        const backgroundData = {
+          blob: file, // 原图Blob对象
+          thumbnailBlob: thumbnailBlob, // 缩略图Blob对象
+          name: file.name, // 文件名
+          type: file.type, // 文件类型
+          size: file.size, // 文件大小
+          timestamp: Date.now() // 时间戳
+        };
 
-      store.clear(); // 清空存储（只保存一张图片）
+        const transaction = db.transaction([STORE_NAME], 'readwrite'); // 创建事务
+        const store = transaction.objectStore(STORE_NAME); // 获取对象存储
 
-      const request = store.add(backgroundData); // 添加数据
+        store.clear(); // 清空存储（只保存一张图片）
 
-      request.onsuccess = (event) => {
-        const id = event.target.result; // 获取生成的ID
-        console.log(`背景图片保存成功，ID: ${id}，大小: ${(file.size / 1024 / 1024).toFixed(2)} MB`); // 输出成功信息
-        resolve(id); // 解析Promise
-      };
+        const request = store.add(backgroundData); // 添加数据
 
-      request.onerror = (event) => {
-        console.error('保存失败:', event.target.error); // 输出错误信息
-        reject(event.target.error); // 拒绝Promise
-      };
+        request.onsuccess = (event) => {
+          const id = event.target.result; // 获取生成的ID
+          console.log(`背景图片保存成功，ID: ${id}，原图大小: ${(file.size / 1024 / 1024).toFixed(2)} MB，缩略图大小: ${(thumbnailBlob.size / 1024).toFixed(1)} KB`);
+          resolve(id); // 解析Promise
+        };
 
-      transaction.oncomplete = () => {
-        console.log('背景保存事务完成'); // 输出完成信息
-      };
+        request.onerror = (event) => {
+          console.error('保存失败:', event.target.error); // 输出错误信息
+          reject(event.target.error); // 拒绝Promise
+        };
+
+        transaction.oncomplete = () => {
+          console.log('背景保存事务完成'); // 输出完成信息
+        };
+      } catch (err) {
+        console.error('生成缩略图失败，尝试仅保存原图:', err);
+        // 降级方案：如果缩略图生成失败，仅保存原图（兼容旧逻辑）
+        const backgroundData = {
+          blob: file,
+          name: file.name,
+          type: file.type,
+          size: file.size,
+          timestamp: Date.now()
+        };
+        const transaction = db.transaction([STORE_NAME], 'readwrite');
+        const store = transaction.objectStore(STORE_NAME);
+        store.clear();
+        const request = store.add(backgroundData);
+        request.onsuccess = (e) => {
+          console.log('背景图片保存成功（无缩略图）');
+          resolve(e.target.result);
+        };
+        request.onerror = (e) => reject(e.target.error);
+      }
     });
   }
 
+  /* ===== 修改点 C：修改 loadBackgroundFromIndexedDB，返回缩略图URL ===== */
   async function loadBackgroundFromIndexedDB() {
     return new Promise(async (resolve, reject) => {
       if (!db) {
@@ -2004,9 +2066,15 @@
         const cursor = event.target.result; // 获取游标
         if (cursor) {
           const data = cursor.value; // 获取数据
-          const blobUrl = URL.createObjectURL(data.blob); // 创建Blob URL
+          const blobUrl = URL.createObjectURL(data.blob); // 创建原图Blob URL
+          let thumbnailUrl = null;
+          // 如果有缩略图，创建缩略图URL
+          if (data.thumbnailBlob) {
+            thumbnailUrl = URL.createObjectURL(data.thumbnailBlob);
+          }
           resolve({
-            url: blobUrl, // 返回URL
+            url: blobUrl, // 原图URL
+            thumbnailUrl: thumbnailUrl, // 缩略图URL（可能为null）
             data: data // 返回原始数据
           });
         } else {
@@ -2608,7 +2676,7 @@
     }, 800); // 800毫秒延迟，确保事件处理完成
   }
 
-  // ========== 初始化事件监听器 ==========
+  /* ===== 修改点 D：修改 initEventListeners 中的背景上传逻辑 ===== */
   function initEventListeners() {
     // 搜索输入框焦点事件
     searchInput.addEventListener('focus', handleSearchFocus);
@@ -2646,7 +2714,7 @@
       });
     });
 
-    // 背景文件输入框变化事件
+    // 背景文件输入框变化事件 —— 修改点 D1：先显示缩略图，再异步加载原图替换
     bgFileInput.addEventListener('change', async function(event) {
       const file = event.target.files[0]; // 获取选择的文件
       if (!file) return; // 如果没有文件，直接返回
@@ -2657,43 +2725,69 @@
       }
 
       const fileSizeMB = (file.size / 1024 / 1024).toFixed(2); // 计算文件大小（MB）
-      console.log(`选择的背景图片大小: ${fileSizeMB} MB`); // 输出文件大小
+      console.log(`选择的背景图片大小: ${fileSizeMB} MB`);
 
       try {
-        await saveBackgroundToIndexedDB(file); // 保存到IndexedDB
+        // 保存到IndexedDB（包含缩略图）
+        await saveBackgroundToIndexedDB(file);
 
-        const bgData = await loadBackgroundFromIndexedDB(); // 从IndexedDB加载
+        // 从IndexedDB加载（优先使用缩略图）
+        const bgData = await loadBackgroundFromIndexedDB();
         if (bgData) {
-          backgroundImage.src = bgData.url; // 设置背景图片源
-          backgroundImage.style.display = 'block'; // 显示背景图片
-          defaultBackground.style.display = 'none'; // 隐藏默认背景
-          backgroundImageSet = true; // 标记已设置背景图片
-
-          const originalHTML = bgUploadBtn.innerHTML; // 保存原始HTML
+          // ----- 第一步：立即显示缩略图（如果有） -----
+          if (bgData.thumbnailUrl) {
+            backgroundImage.src = bgData.thumbnailUrl;
+            backgroundImage.style.display = 'block';
+            defaultBackground.style.display = 'none';
+            backgroundImageSet = true;
+            console.log('已显示缩略图，等待原图加载...');
+          } else {
+            // 没有缩略图（旧数据），直接显示原图
+            backgroundImage.src = bgData.url;
+            backgroundImage.style.display = 'block';
+            defaultBackground.style.display = 'none';
+            backgroundImageSet = true;
+          }
 
           // 临时显示成功消息
+          const originalHTML = bgUploadBtn.innerHTML;
           bgUploadBtn.innerHTML = `
             <svg class="bg-upload-icon" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
               <path d="M9 16.17L4.83 12L3.41 13.41L9 19L21 7L19.59 5.59L9 16.17Z" fill="white"/>
             </svg>
             <span class="bg-upload-tooltip">背景已设置 (${fileSizeMB}MB)</span>
           `;
-
-          // 2秒后恢复原始HTML
           setTimeout(() => {
             bgUploadBtn.innerHTML = originalHTML;
-            colorAdapter.restoreOriginalBGUploadBtn(); // 恢复原始背景上传按钮
+            colorAdapter.restoreOriginalBGUploadBtn();
           }, 2000);
 
-          console.log(`背景图片已保存到IndexedDB: ${file.name} (${fileSizeMB} MB)`); // 输出成功信息
+          // ----- 第二步：如果显示的是缩略图，异步加载原图替换 -----
+          if (bgData.thumbnailUrl && bgData.url) {
+            // 用 Image 对象预加载原图，不阻塞界面
+            const fullImg = new Image();
+            fullImg.onload = function() {
+              // 原图加载完成，替换背景
+              backgroundImage.src = bgData.url;
+              console.log('原图加载完成，已替换缩略图');
+              // 触发颜色适应器重新分析
+              if (colorAdapter.initialized) {
+                setTimeout(() => colorAdapter.analyzeAndAdapt(), 0);
+              }
+            };
+            fullImg.onerror = function() {
+              console.warn('原图加载失败，保留缩略图');
+            };
+            fullImg.src = bgData.url;
+          }
 
-          // 图片加载完成后重新分析并适应颜色
+          // 图片加载完成后重新分析并适应颜色（缩略图阶段）
           if (backgroundImage.complete) {
-            setTimeout(() => colorAdapter.analyzeAndAdapt(), 100);
+            setTimeout(() => colorAdapter.analyzeAndAdapt(), 0);
           } else {
             backgroundImage.addEventListener('load', () => {
-              setTimeout(() => colorAdapter.analyzeAndAdapt(), 100);
-            }, { once: true }); // 只执行一次
+              setTimeout(() => colorAdapter.analyzeAndAdapt(), 0);
+            }, { once: true });
           }
         }
       } catch (error) {
@@ -2712,9 +2806,31 @@
     });
   }
 
-  // === 简化初始化 ===
+  /* ===== 修改点 E：修改 init 函数，先显示缩略图再异步加载原图 ===== */
   async function init() {
     console.log('正在初始化Infinite Glass Tab...'); // 输出初始化开始信息
+
+    // ==========【最终修复·桌面端兼容】仅 Android 设备锁定 body/html 高度为初始视口像素值 ==========
+    // 问题：CSS 中 body { height: 100%; } 的 100% 参照的是动态视口高度。
+    //       在 Android WebView 的 adjustResize 模式下，键盘弹出时 WebView 直接缩小视口高度
+    //       （例如从 800px 缩小到 500px），导致 body 的 height: 100% 跟着从 800px 变成 500px，
+    //       然后 justify-content: center 在 500px 的容器里重新居中 → 所有内容被"推"上去。
+    // 解决：在页面初始化时（键盘尚未弹出），用 JS 读取真实的 window.innerHeight，
+    //       以固定像素值写入 body/html 的行内 style（行内样式优先级高于 CSS），
+    //       后续 WebView 视口如何变化，body 高度始终焊死在初始值，布局纹丝不动。
+    // 桌面端例外：桌面浏览器没有 adjustResize 行为，锁定高度反而会导致窗口大小改变时
+    //       出现白边（如 Edge 锁定在 676px 但窗口实际 710px）或内容溢出。
+    //       因此仅在 Android 设备上执行高度锁定，桌面端保持 CSS height: 100% 自适应。
+    const isAndroid = /Android/i.test(navigator.userAgent);
+    if (isAndroid) {
+      const INITIAL_VIEWPORT_HEIGHT = window.innerHeight;
+      document.body.style.height = INITIAL_VIEWPORT_HEIGHT + 'px';
+      document.body.style.minHeight = INITIAL_VIEWPORT_HEIGHT + 'px';
+      document.documentElement.style.height = INITIAL_VIEWPORT_HEIGHT + 'px';
+      console.log('【最终修复·桌面端兼容】Android：body/html 高度已锁定为: ' + INITIAL_VIEWPORT_HEIGHT + 'px，键盘弹出不会改变布局');
+    } else {
+      console.log('【最终修复·桌面端兼容】非 Android：跳过高度锁定，保持 CSS height: 100% 自适应 (当前: ' + window.innerHeight + 'px)');
+    }
 
     suggestionsContent = document.getElementById('suggestions-content'); // 获取建议内容容器
     raceStatusContainer = document.getElementById('race-status-container'); // 获取竞速状态容器
@@ -2725,15 +2841,59 @@
       await openBackgroundDB(); // 打开IndexedDB
       const bgData = await loadBackgroundFromIndexedDB(); // 加载背景图片
       if (bgData) {
-        backgroundImage.src = bgData.url; // 设置背景图片源
-        backgroundImage.style.display = 'block'; /* 显示背景图片 */
-        defaultBackground.style.display = 'none'; /* 隐藏默认背景 */
-        backgroundImageSet = true; /* 标记已设置背景图片 */
+        // ----- 第一步：立即显示缩略图（如果有） -----
+        if (bgData.thumbnailUrl) {
+          backgroundImage.src = bgData.thumbnailUrl;
+          backgroundImage.style.display = 'block';
+          defaultBackground.style.display = 'none';
+          backgroundImageSet = true;
+          console.log('已显示缩略图，正在后台加载原图...');
+        } else {
+          // 没有缩略图（旧数据），直接显示原图
+          backgroundImage.src = bgData.url;
+          backgroundImage.style.display = 'block';
+          defaultBackground.style.display = 'none';
+          backgroundImageSet = true;
+          console.log('已加载原图（无缩略图）');
+        }
+
         const fileSizeMB = (bgData.data.size / 1024 / 1024).toFixed(2); /* 计算文件大小 */
-        console.log(`已加载保存的背景图片: ${bgData.data.name} (${fileSizeMB} MB)`); /* 输出加载信息 */
+        console.log(`已加载保存的背景图片: ${bgData.data.name} (${fileSizeMB} MB)`);
+
+        // ----- 第二步：如果显示的是缩略图，异步加载原图替换 -----
+        if (bgData.thumbnailUrl && bgData.url) {
+          // 用 Image 对象预加载原图，不阻塞界面
+          const fullImg = new Image();
+          fullImg.onload = function() {
+            // 原图加载完成，替换背景
+            backgroundImage.src = bgData.url;
+            console.log('原图加载完成，已替换缩略图');
+            // 触发颜色适应器重新分析
+            if (colorAdapter.initialized) {
+              setTimeout(() => colorAdapter.analyzeAndAdapt(), 0);
+            }
+          };
+          fullImg.onerror = function() {
+            console.warn('原图加载失败，保留缩略图');
+          };
+          fullImg.src = bgData.url;
+        }
+
+        // 缩略图加载完成后分析颜色适应
+        if (backgroundImage.complete) {
+          setTimeout(() => colorAdapter.analyzeAndAdapt(), 0);
+        } else {
+          backgroundImage.addEventListener('load', () => {
+            setTimeout(() => colorAdapter.analyzeAndAdapt(), 0);
+          }, { once: true });
+        }
+      } else {
+        // 没有保存的背景，确保默认背景显示
+        defaultBackground.style.display = 'block';
       }
     } catch (error) {
       console.warn('IndexedDB初始化失败或没有保存的背景:', error); /* 输出警告信息 */
+      defaultBackground.style.display = 'block';
     }
 
     currentEngine = loadEnginePreference(); /* 加载引擎偏好 */
@@ -2758,12 +2918,17 @@
 
     console.log('初始化完成，当前模式:', isOnline ? '在线' : '离线'); /* 输出初始化完成信息 */
     console.log('记忆的搜索引擎:', currentEngine);
-    console.log('键盘布局管理器已启用');
+    console.log('键盘布局管理器已启用（简化版：不再与浏览器原生行为冲突）'); /* 【修复】更新日志 */
     console.log('搜索框和引擎按钮同步上移，控制按钮向左隐藏');
     console.log('继承第九界面的设计：1.1倍聚焦放大动画 + 三层阴影效果');
     console.log('iOS设备特殊优化：搜索框聚焦时上移距离调整为iPhone: 115px, iPad: 125px');
     console.log('iOS重复打开标签页问题已修复：使用统一click事件+防重复触发机制');
     console.log('自定义背景按钮已改为可伸缩按钮，展开长度动态匹配文字和图标');
+    /* ===== 修改点 E 新增日志 ===== */
+    console.log('渐进式背景加载已启用：先显示缩略图，原图加载完成后自动替换');
+    /* 【修复】新增日志 */
+    console.log('【最终修复】body 高度已锁定为初始视口像素值（仅 Android），adjustResize 无法改变布局');
+    console.log('【最终修复·桌面端兼容】桌面浏览器跳过高度锁定，保持 height: 100% 自适应窗口大小');
   }
 
   // 当DOM加载完成后执行初始化
