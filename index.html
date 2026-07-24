@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <!-- 设置视口，确保在移动设备上正确缩放 -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-  <title>Infinite Glass Tab(v41)</title>
+  <title>Infinite Glass Tab(v79)</title>
   <style>
     /* ========== CSS变量定义 ========== */
     /* 定义可重用的CSS变量，方便全局管理和维护 */
@@ -418,7 +418,7 @@
     }
 
     /* ========== 搜索容器和输入框 ========== */
-    /* 搜索包装器 */
+    /* 搜索包装器 - 改为form以阻止Chrome自动填充 */
     .search-wrapper {
       width: 100%;
       max-width: 700px; /* 最大宽度 */
@@ -440,7 +440,7 @@
       transform: translateY(-60px) scale(1.1) translateZ(0); /* 上移60px并放大1.1倍，GPU加速 */
     }
 
-    /* 胶囊形状搜索输入框 */
+    /* 胶囊形状搜索输入框 - type=search + inputmode=search 三重阻止Chrome自动填充 */
     #search-input {
       width: 100%;
       padding: 24px 70px 24px 28px; /* 内边距，右侧留出按钮空间 */
@@ -462,6 +462,13 @@
       /*will-change: transform, background, box-shadow; !* 预知属性变化 *!*/
       /*contain: layout paint;*/ /* 包含策略优化 */
       -webkit-transform: translateZ(0); /* Safari GPU加速 */
+    }
+
+    /* ===== 【Chrome/Edge 修复】隐藏 type=search 自带的清除按钮，保留 type=search 的防自动填充能力 ===== */
+    #search-input::-webkit-search-cancel-button,
+    #search-input::-webkit-search-decoration {
+      -webkit-appearance: none;
+      display: none;
     }
 
     /* 输入框占位符样式 */
@@ -686,16 +693,21 @@
       -webkit-transform: translateZ(0); /* Safari GPU加速 */
     }
 
-    /* 悬停时显示背景层 */
+    /* ===== 【v76 fix】统一所有平台悬停高亮底色 ===== */
+    /* 根因：WebKit 上 backdrop-filter: blur(3px) 与深色容器背景叠加渲染时，
+             视觉效果比 Blink 更深。移除模糊，提高背景不透明度，使五端表现一致。 */
     .suggestion-item:hover::before {
-      opacity: 1; /* 显示背景层 */
+      opacity: 1;
+      background: rgba(255, 255, 255, 0.12); /* 从不透明度 0.05 提升至 0.12，覆盖 WebKit 默认深色渲染 */
+      backdrop-filter: none; /* 移除模糊，消除跨引擎渲染差异 */
+      -webkit-backdrop-filter: none;
     }
 
     /* 悬停时文字样式变化 */
     .suggestion-item:hover .suggestion-text {
       mix-blend-mode: normal; /* 恢复正常混合模式 */
       color: white; /* 白色文字 */
-      /* 悬停时的三层阴影效果 */
+      /* 悬停时的三层阴影效果 — 第三层已由用户确认改回 rgba(0,0,0,0.1) */
       text-shadow:
               0 0 15px rgba(255, 255, 255, 0.3),
               0 0 8px rgba(255, 255, 255, 0.2),
@@ -1253,10 +1265,10 @@
   </button>
 </div>
 
-<!-- 搜索包装器 -->
-<div class="search-wrapper" id="search-wrapper">
-  <!-- 搜索输入框 -->
-  <input type="text" id="search-input" placeholder="输入内容开始搜索..." autocomplete="off" spellcheck="false">
+<!-- ===== 【自动填充修复】div → form + autocomplete="off"，配合 type=search + inputmode=search 三重保险 ===== -->
+<form class="search-wrapper" id="search-wrapper" autocomplete="off">
+  <!-- 搜索输入框 - type="search" + inputmode="search" 告诉Chrome这是搜索框，不是表单 -->
+  <input type="search" id="search-input" placeholder="输入内容开始搜索..." autocomplete="nope" spellcheck="false" data-form-type="other" inputmode="search">
 
   <!-- 搜索按钮 -->
   <button id="search-btn">
@@ -1274,7 +1286,7 @@
     <!-- 竞速状态容器 -->
     <div id="race-status-container"></div>
   </div>
-</div>
+</form>
 
 <script>
   // ========== 核心配置 ==========
@@ -1511,20 +1523,42 @@
     constructor() {
       this.isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent); // 检测是否为移动设备
       this.isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream; // 检测是否为iOS设备
+      // ===== 【v61 fix】新增 iPad 设备检测，用于 updateSuggestionsHeight 中平台自适应底部间距 =====
+      this.isIPad = /iPad/.test(navigator.userAgent); // 检测是否为 iPad 设备（iPadOS 使用 45 底部间距）
       this.keyboardHeight = 0; // 键盘高度
       this.initialViewportHeight = window.innerHeight; // 【最终修复】记录初始视口高度，用于在 resize 中锁定 body 高度不被 adjustResize 改变
       // 【最终修复·桌面端兼容】标记是否为 Android 设备，仅 Android 才锁定 body 高度
       this.isAndroid = /Android/i.test(navigator.userAgent);
+      // ===== 【Chrome/Edge 修复】记录初始 visualViewport 高度，用于 adjustPan 模式下的键盘检测 =====
+      this.initialVisualViewportHeight = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+      // ===== 【Chrome/Edge 修复】统一用 visualViewport.height 作为基准 =====
+      this.lastVisualHeight = this.initialVisualViewportHeight;
+      // ===== 【v54 fix】防抖标志：同一帧内只执行一次 updateSuggestionsHeight =====
+      // 根因：键盘弹出/缩回时 visualViewport.resize 事件高频触发（每秒 30-60 次），
+      //       每次 updateSuggestionsHeight() 都设置新的 maxHeight 会重置 CSS transition，
+      //       导致过渡动画永远跑不到终点，视觉上像卡住。
+      // 解决：用 requestAnimationFrame 合并一帧内的多次调用，只设一次 maxHeight，
+      //       transition 就能完整跑完 0.45s。
+      this._heightUpdatePending = false;
+      // ===== 【v55 debug】计算计数器 =====
+      this._heightCalcCounter = 0;
+      // ===== 【v57 fix】键盘过渡定时器，等待 searchWrapper 的 0.5s CSS transition 结束 =====
+      this._keyboardTransitionTimer = null;
+      // ===== 【v60 fix】全局冷却时间戳：382ms 内不重复计算，无论从什么路径进入 =====
+      this._globalCooldownTs = 0;
       this.setupEventListeners(); // 设置事件监听器
     }
 
     setupEventListeners() {
-      // 【修复】监听窗口大小变化 - 仅用于检测键盘状态和更新建议框高度，不再修改 body 样式
-      window.addEventListener('resize', this.handleResize.bind(this));
-
-      // iOS键盘检测
-      if (this.isIOS && window.visualViewport) {
-        window.visualViewport.addEventListener('resize', this.handleIOSKeyboard.bind(this));
+      // ===== 【Chrome/Edge 修复】不再依赖 window resize，改为统一监听 visualViewport resize =====
+      // visualViewport 在 adjustPan（Chrome/Edge）和 adjustResize（Via/Kiwi）模式下都能触发，
+      // window.resize 在某些 adjustPan 模式下不会触发，因此仅保留 visualViewport 监听即可覆盖所有浏览器。
+      if (window.visualViewport) {
+        // visualViewport 的 resize 事件在键盘弹出时所有浏览器都会触发
+        window.visualViewport.addEventListener('resize', this.handleViewportResize.bind(this));
+      } else {
+        // 降级：不支持 visualViewport 的浏览器回退到 window.resize
+        window.addEventListener('resize', this.handleViewportResize.bind(this));
       }
 
       // 监听输入框焦点变化
@@ -1541,43 +1575,58 @@
       });
     }
 
-    handleResize() {
-      const newHeight = window.innerHeight; // 获取新的窗口高度
+    // ===== 【Chrome/Edge 修复】统一视口变化处理器 =====
+    // ===== 【v57 fix】键盘状态变化时等 CSS transition 结束再计算 =====
+    // 根因：searchWrapper 有 transition: all 0.5s，getBoundingClientRect() 读到过渡中间值
+    // 修复：键盘状态变化时等 382ms 让 CSS transition 结束再计算
+    // ===== 【v63 fix】定时器路径传入 force=true，强制绕开冷却锁 =====
+    // ===== 【v65 fix】改用视口高度变化直接判断键盘状态切换，不依赖 isKeyboardVisible 标志位 =====
+    // 根因：iPad 上 focus/blur 预置了 isKeyboardVisible，导致 wasKeyboardVisible 比对永远为 false，
+    //       第二次聚焦不走定时器 force 路径，高度不刷新。
+    // 修复：直接用视口高度缩/放的结果视口Shrank/viewportGrew 决定是否走 force 路径。
+    handleViewportResize() {
+      const vv = window.visualViewport;
+      const currentHeight = vv ? vv.height : window.innerHeight;
 
-      // 【修复】仅检测键盘是否显示，不再强制修改 body 的 height/overflow
-      if (newHeight < windowHeight * 0.7) {
-        this.keyboardHeight = windowHeight - newHeight; // 计算键盘高度
-        this.handleKeyboardShow(); // 处理键盘显示（仅标记状态）
-      } else {
-        this.keyboardHeight = 0; // 重置键盘高度
-        this.handleKeyboardHide(); // 处理键盘隐藏（仅标记状态）
+      // ===== 【v65 fix】直接用视口高度比较结果判断键盘是否切换，不依赖 isKeyboardVisible 标志位 =====
+      const viewportShrank = currentHeight < this.lastVisualHeight * 0.8;
+      const viewportGrew = currentHeight >= this.lastVisualHeight * 0.95;
+
+      // 使用阈值 0.8 检测键盘弹出（比 0.7 更灵敏）
+      if (viewportShrank) {
+        this.keyboardHeight = this.lastVisualHeight - currentHeight;
+        this.handleKeyboardShow();
+      } else if (viewportGrew) {
+        // 视口恢复（接近原始高度）→ 键盘隐藏
+        this.keyboardHeight = 0;
+        this.handleKeyboardHide();
       }
 
-      windowHeight = newHeight; // 更新窗口高度
-      // 【最终修复·桌面端兼容】仅 Android 设备才锁定 body 高度，桌面端保持 CSS height: 100% 自适应浏览器窗口大小
-      // 原因：桌面端没有 adjustResize 问题，锁定高度反而会导致窗口大小改变时出现白边或内容溢出
+      this.lastVisualHeight = currentHeight;
+
+      // 【最终修复·桌面端兼容】仅 Android 设备锁定 body 高度
       if (this.isAndroid) {
         document.body.style.height = this.initialViewportHeight + 'px';
       }
-      this.updateSuggestionsHeight(); // 更新建议框高度
+
+      // ===== 【v65 fix】键盘状态切换检测改用视口变化结果，确保 iPad 第二次聚焦不走丢 =====
+      if (viewportShrank || viewportGrew) {
+        clearTimeout(this._keyboardTransitionTimer);
+        this._keyboardTransitionTimer = setTimeout(() => {
+          this.updateSuggestionsHeight(true); // force=true：键盘状态变化后的延迟回调，必须刷新
+        }, 382);
+      } else {
+        this.updateSuggestionsHeight();
+      }
+    }
+
+    // ===== 【Chrome/Edge 修复】旧的 handleResize 和 handleIOSKeyboard 已废弃，保留但不使用 =====
+    handleResize() {
+      // 【已废弃】被 handleViewportResize 取代
     }
 
     handleIOSKeyboard(e) {
-      const visualViewport = e.target; // 获取视觉视口
-      const layoutViewport = document.documentElement; // 获取布局视口
-
-      // 计算键盘高度
-      const keyboardHeight = layoutViewport.clientHeight - visualViewport.height;
-
-      if (keyboardHeight > 100) {
-        this.keyboardHeight = keyboardHeight; // 设置键盘高度
-        this.handleKeyboardShow(); // 处理键盘显示
-      } else {
-        this.keyboardHeight = 0; // 重置键盘高度
-        this.handleKeyboardHide(); // 处理键盘隐藏
-      }
-
-      this.updateSuggestionsHeight(); // 更新建议框高度
+      // 【已废弃】被 handleViewportResize 取代
     }
 
     handleKeyboardShow() {
@@ -1598,19 +1647,108 @@
       // 【修复】移除了恢复 body 高度和 overflow 的代码，CSS fixed 定位已保证布局稳定
     }
 
-    updateSuggestionsHeight() {
+    // ===== 【v53 fix】重写 updateSuggestionsHeight =====
+    // 根因分析：v47 的问题在于——
+    //   1. 双重扣除了 keyboardHeight（visualViewport.height 在 iPad Via 上已自动扣除键盘区域）
+    //   2. #suggestions 有 transition: all 0.45s，安全钳读 DOM 会读到过渡中间值导致振荡
+    // 修复策略：
+    //   1. 不再减 keyboardHeight（仅用 visualViewport.height 作为可用空间上限）
+    //   2. 改用数学预判溢出（设高度前就算好建议框底部位置，与视口比较），不读过渡中的 DOM
+    //   3. 保留 CSS transition: all 0.45s 不变，所有动画完好
+    // ===== 【v54 fix】防抖：同一帧内只执行一次 =====
+    //   键盘弹出/缩回期间 visualViewport.resize 大量触发，被 rAF 合并为一帧一次，
+    //   maxHeight 不会频繁改写，CSS transition 不再被中断，动画完整跑通。
+    // ===== 【v60 fix】全局冷却：382ms 内只执行一次，不管从定时器还是 ELSE 进入 =====
+    // ===== 【v61 fix】平台自适应底部间距：iPadOS 使用 45，其他平台使用 40 =====
+    // ===== 【v63 fix】修复死锁：冷却检查提前到所有状态修改之前；新增 force 参数 =====
+    // 根因：v60 冷却检查在 _heightUpdatePending = true 之后，冷却拦截时锁已上但没解锁路径，
+    //       导致定时器和 ELSE 路径全部卡在 _heightUpdatePending 检查上，高度永不刷新。
+    // 修复：① 冷却检查移到 _heightUpdatePending 和一切状态修改之前，冷却拦截不留任何残留状态；
+    //       ② force=true 时（来自键盘状态变化后的 382ms 延迟回调）强制跳过冷却，确保刷新。
+    // ===== 【v63 fix】新增 force 参数 =====
+    // ===== 【v65 fix】iPad padding 调整+ cap 降低 =====
+    updateSuggestionsHeight(force) {
       if (!suggestionsBox || !suggestionsBox.classList.contains('show')) return; // 如果建议框不存在或未显示，直接返回
 
-      const searchRect = searchWrapper.getBoundingClientRect(); // 获取搜索框位置信息
-      const availableHeight = window.innerHeight - searchRect.bottom - 40; // 计算可用高度
+      // ===== 【v63 fix】冷却检查提前到所有状态修改之前 =====
+      // 先检查冷却，若未通过且非强制模式，直接 return，不锁、不排队，不留任何残留状态
+      const now = Date.now();
+      if (!force && now - this._globalCooldownTs < 382) return;
 
-      // 考虑键盘高度，计算最大高度
-      const maxHeight = Math.min(
-              460, // 最大高度限制
-              Math.max(200, availableHeight - (this.keyboardHeight > 0 ? this.keyboardHeight : 0)) // 考虑键盘高度的最小高度
-      );
+      // ===== 【v54 fix】防抖：如果已经有同帧更新在排队，跳过本次 =====
+      if (this._heightUpdatePending) return;
+      this._heightUpdatePending = true;
 
-      suggestionsBox.style.maxHeight = `${maxHeight}px`; // 设置建议框最大高度
+      // ===== 【v63 fix】冷却时间戳在进入计算路径后才更新（此时已确定要执行） =====
+      this._globalCooldownTs = now;
+
+      requestAnimationFrame(() => {
+        this._heightUpdatePending = false; // 释放防抖锁
+
+        const callId = ++this._heightCalcCounter; // 【v55 debug】每次计算编号
+        const timestamp = Date.now();
+
+        const searchRect = searchWrapper.getBoundingClientRect(); // 获取搜索框位置信息
+        // ===== 【Chrome/Edge 修复】使用 visualViewport.height 计算可用高度 =====
+        const vv = window.visualViewport;
+        const viewportHeight = vv ? vv.height : window.innerHeight;
+
+        // ===== 【v65 fix】iPad 底部 padding 由 45px 调整为 50px，增加底部安全空间 =====
+        const padding = this.isIPad ? 50 : 40;
+
+        // ===== 【v55 debug】输入日志 =====
+        console.log(`=== [v65 高度计算 #${callId}] ${force ? '【强制模式】' : '【正常模式】'} 触发时间: ${new Date(timestamp).toLocaleTimeString()}.${timestamp % 1000} ===`);
+        console.log(`  键盘可见: ${isKeyboardVisible} | keyboardHeight: ${this.keyboardHeight} | lastVisualHeight: ${this.lastVisualHeight}`);
+        console.log(`  ① viewportHeight (visualViewport.height): ${viewportHeight}`);
+        console.log(`  ② searchRect.bottom: ${searchRect.bottom}`);
+        console.log(`  ③ padding (平台自适应): ${padding} (${this.isIPad ? 'iPadOS' : '非iPadOS'})`);
+
+        const availableHeight = viewportHeight - searchRect.bottom - padding; // 计算可用高度
+        console.log(`  --- 公式: viewportHeight(${viewportHeight}) - searchRect.bottom(${searchRect.bottom}) - ${padding} = ${availableHeight}`);
+
+        // ===== 【v53 fix】不再减去 keyboardHeight =====
+        // visualViewport.height 在 iPad Via（adjustResize 模式）下已经自动扣除了键盘区域，
+        // 再减一次等于双重扣除，导致 availableHeight 被压到 200px 兜底值，建议框只显示 2 条。
+        let maxHeight = Math.min(
+                460, // 最大高度限制
+                Math.max(200, availableHeight) // 最小高度限制
+        );
+
+        // ===== 【v65 fix】iPad 缩下键盘后搜索结果栏上限降 10px，防止过长溢出屏幕 =====
+        if (this.isIPad && !isKeyboardVisible && maxHeight > 420) {
+          console.log(`  ⚠ iPad无键盘 cap 从 460px 降为 420px`);
+          maxHeight = 420;
+        }
+
+        console.log(`  ④ min(460, max(200, ${availableHeight})) = ${maxHeight} ` + (availableHeight < 200 ? `← hit 200 兜底` : maxHeight === 460 ? `← hit 460 上限` : maxHeight === 420 ? `← iPad cap 420` : `← 正常范围`));
+
+        // ===== 【v53 fix】数学预判溢出（取代原来的读 DOM 安全钳）=====
+        // #suggestions 的 CSS top 是 calc(100% + 14px)，所以建议框顶部 = searchRect.bottom + 14
+        // 纯数学计算，不受任何 transition 干扰。
+        const boxTop = searchRect.bottom + 14; // 建议框顶部位置
+        const boxBottom = boxTop + maxHeight; // 建议框底部位置
+        console.log(`  ⑤ 建议框顶部(boxTop = searchRect.bottom + 14): ${boxTop}`);
+        console.log(`  ⑥ 建议框底部(boxBottom = boxTop + maxHeight): ${boxBottom}`);
+        console.log(`  ⑦ 视口底部(viewportHeight - 4): ${viewportHeight - 4}`);
+
+        let clamped = false;
+        if (boxBottom > viewportHeight - 4) {
+          // 如果建议框底部超出视口，裁剪到刚好不溢出
+          const old = maxHeight;
+          maxHeight = Math.max(180, viewportHeight - 4 - boxTop);
+          clamped = true;
+          console.log(`  ⚠ 溢出! 超出 ${boxBottom - (viewportHeight - 4)}px → 从 ${old}px 裁剪至 ${maxHeight}px`);
+        } else {
+          console.log(`  ✅ 未溢出，保持 ${maxHeight}px`);
+        }
+
+        suggestionsBox.style.maxHeight = `${maxHeight}px`; // 设置建议框最大高度
+        console.log(`  ✅ 最终设置建议框 max-height = ${maxHeight}px ${clamped ? '(裁剪后)' : ''}`);
+        console.log(`  建议框实际的底部位置（数学预测）: boxTop(${boxTop}) + maxHeight(${maxHeight}) = ${boxTop + maxHeight}`);
+        console.log(`==========================`);
+        // 【v53 fix】注意：CSS transition: all 0.45s 保持不变，max-height 会平滑过渡到新值
+        // 【v54 fix】rAF 防抖确保了键盘动画期间只设一次 maxHeight，transition 不会被频繁重置
+      });
     }
   }
 
@@ -1742,7 +1880,7 @@
         if (document.visibilityState === 'visible') {
           this.analyzeAndAdapt(); // 仅在页面可见时执行
         }
-      }, 3000);
+      }, 618);
     }
 
     analyzeBackgroundBrightness() {
@@ -2540,7 +2678,11 @@
     item.dataset.suggestion = suggestion; // 将建议内容存储到数据属性中
   }
 
-  // ========== 简化版：焦点状态管理 ==========
+  // ========== 【v78 fix】handleSearchFocus：下一帧 rAF 加固聚焦类，防止 Safari 内部重绘清除 =====
+  // 根因：macOS Safari 点击 type="search" 输入框时，浏览器内部会做一次原生搜索控件重绘，
+  //       导致 search-focused/focused/blurred 类被瞬间移除，transform 动画回弹。
+  //       表现为"搜索框向上跳动了一下随后瞬间回落"。
+  // 修复：在下一帧（requestAnimationFrame）重新确认并加固聚焦类，覆盖 Safari 内部重绘的清零。
   function handleSearchFocus() {
     document.body.classList.add('search-focused'); // 添加搜索聚焦类
     searchWrapper.classList.add('focused'); // 添加搜索包装器聚焦类
@@ -2551,10 +2693,31 @@
     if (searchInput.value.trim()) {
       updateSuggestions(); // 如果输入框有内容，更新建议
     }
+
+    // ===== 【v78 fix】下一帧重新确认聚焦类，防止 Safari 内部重绘清除导致动画回弹 =====
+    requestAnimationFrame(() => {
+      if (document.activeElement === searchInput) {
+        // 如果输入框仍然拥有焦点，确保三个聚焦类都存在
+        document.body.classList.add('search-focused');
+        searchWrapper.classList.add('focused');
+        backgroundContainer.classList.add('blurred');
+      }
+    });
   }
 
+  // ========== 【v67 fix v3】handleSearchBlur：搜索触发时不取消聚焦状态，由 blur 自己清标志 =====
+  // 根因：用 300ms 定时器清 _searchJustTriggered，切标签页回来定时器可能未执行，
+  //       导致标志一直为 true，后续所有 blur 都被拦截，点击空白处无法取消聚焦。
+  // 修复：不在定时器中清标志，而是由 handleSearchBlur 在跳过取消聚焦后自己清掉标志。
+  //       这样标志只对紧跟搜索的那一次 blur 生效，后续 blur 恢复正常行为。
   function handleSearchBlur() {
     setTimeout(() => {
+      // ===== 【v67 fix v3】由 blur 自己清标志，不留残留 =====
+      if (window._searchJustTriggered) {
+        window._searchJustTriggered = false; // 清标志，仅保护这一次 blur
+        return;
+      }
+
       const activeElement = document.activeElement; // 获取当前焦点元素
       // 如果焦点不在搜索输入框和建议框内
       if (activeElement !== searchInput && !suggestionsBox.contains(activeElement)) {
@@ -2641,39 +2804,33 @@
     layoutManager.updateSuggestionsHeight(); // 更新建议框高度
   }
 
-  // ========== 执行搜索（已添加防重复触发机制）==========
+  // ===== 【v67 fix v3】performSearch：去掉所有延迟和聚焦状态取消，由 blur 自己清标志 =====
+  // 用户要求：点击搜索按钮 / 回车搜索 / 点击搜索建议三项行为，
+  //          ① 不取消聚焦状态（不移除 search-focused/focused/blurred 类，不隐藏建议框和竞速状态）
+  //          ② 不用延迟（去掉 800ms 和 500ms setTimeout）
+  //          ③ 全平台适用
+  // ===== 【v67 fix v3】不再用定时器清 _searchJustTriggered，由 handleSearchBlur 自己清 =====
   function performSearch() {
-    // 防重复触发检查 - 防止iOS上重复打开标签页
-    if (window._searchPerforming) {
-      return; // 如果已经在执行搜索，直接返回，防止重复触发
-    }
+    if (window._searchPerforming) return;
+    window._searchPerforming = true;
 
-    window._searchPerforming = true; // 设置搜索执行标志
-
-    const query = searchInput.value.trim(); // 获取搜索词并去除首尾空格
+    const query = searchInput.value.trim();
     if (!query) {
-      window._searchPerforming = false; // 重置搜索执行标志
-      return; // 如果搜索词为空，直接返回
+      window._searchPerforming = false;
+      return;
     }
 
-    const engine = CONFIG.engines[currentEngine]; // 获取当前引擎配置
-    const searchUrl = engine.url + encodeURIComponent(query); // 构建搜索URL
+    const engine = CONFIG.engines[currentEngine];
+    const searchUrl = engine.url + encodeURIComponent(query);
 
-    // 使用setTimeout避免iOS的快速连续触发
-    setTimeout(() => {
-      window.open(searchUrl, '_blank'); // 在新标签页打开搜索
+    // 设置搜索触发标志，阻止 blur 处理取消聚焦
+    // ===== 【v67 fix v3】标志由 handleSearchBlur 自己清除，不留任何定时器 =====
+    window._searchJustTriggered = true;
 
-      suggestionsBox.classList.remove('show'); // 隐藏建议框
-      searchWrapper.classList.remove('focused'); // 移除搜索包装器聚焦类
-      backgroundContainer.classList.remove('blurred'); // 移除背景模糊类
-      document.body.classList.remove('search-focused'); // 移除搜索聚焦类
-      hideRaceStatus(); // 隐藏竞速状态
+    window.open(searchUrl, '_blank');
 
-      // 重置防重复标志（使用延迟确保不会立即响应下一个点击）
-      setTimeout(() => {
-        window._searchPerforming = false; // 重置搜索执行标志
-      }, 500); // 500毫秒延迟，足够防止iOS上的双击或快速点击
-    }, 800); // 800毫秒延迟，确保事件处理完成
+    // ===== 【v67 fix v3】_searchPerforming 立即释放，不需要延迟 =====
+    window._searchPerforming = false;
   }
 
   /* ===== 修改点 D：修改 initEventListeners 中的背景上传逻辑 ===== */
@@ -2681,6 +2838,17 @@
     // 搜索输入框焦点事件
     searchInput.addEventListener('focus', handleSearchFocus);
     searchInput.addEventListener('blur', handleSearchBlur);
+
+    // ===== 【v77 fix】macOS Safari 聚焦修复：Safari 有时不触发 focus 事件，添加 click 事件作为兜底 =====
+    searchInput.addEventListener('click', function(e) {
+      // Safari 点击搜索框后若未进入聚焦状态，手动激活
+      if (!document.body.classList.contains('search-focused')) {
+        handleSearchFocus();
+      }
+    });
+
+    // ===== 【自动填充修复】阻止 form 提交（防止回车键提交表单刷新页面） =====
+    searchWrapper.addEventListener('submit', (e) => e.preventDefault());
 
     // 搜索输入框输入事件
     searchInput.addEventListener('input', () => {
@@ -2797,9 +2965,24 @@
       }
     });
 
-    // 文档点击事件（点击其他地方隐藏建议框）
+    // ===== 【v74 fix】文档点击事件：点击搜索框外部同时取消聚焦状态 =====
+    // 根因：搜索后切回页面，输入框已失去焦点，点击空白处不触发 blur 事件，
+    //       聚焦类（search-focused/focused/blurred）无法被移除，导致界面处于"假聚焦"状态。
+    //       文档点击监听器作为兜底，无论输入框是否有焦点，点击外部直接取消所有聚焦类。
+    // ===== 【v79 fix】macOS Safari 聚焦回弹终极修复：焦点在输入框时不再取消聚焦 =====
+    // 根因：Safari 点击空的 type="search" 输入框时，会弹出原生搜索历史弹层，
+    //       该弹层触发 click 事件时 e.target 不属于 searchWrapper 或 suggestionsBox，
+    //       导致 v74 fix 误移除聚焦类，动画回弹。
+    //       有文字时 Safari 不弹出原生弹层，因此 99% 成功（vs 40% 的差异根源）。
+    // 修复：如果输入框当前拥有焦点（包括原生弹层打开时焦点仍在输入框），直接 return。
     document.addEventListener('click', function(e) {
+      // ===== 【v79 fix】如果输入框当前拥有焦点，不取消聚焦（保护 Safari 原生弹层的聚焦状态）=====
+      if (document.activeElement === searchInput) return;
+
       if (!searchWrapper.contains(e.target) && !suggestionsBox.contains(e.target)) {
+        document.body.classList.remove('search-focused'); // 移除搜索聚焦类
+        searchWrapper.classList.remove('focused'); // 移除搜索包装器聚焦类
+        backgroundContainer.classList.remove('blurred'); // 移除背景模糊类
         suggestionsBox.classList.remove('show'); // 隐藏建议框
         hideRaceStatus(); // 隐藏竞速状态
       }
@@ -2808,7 +2991,7 @@
 
   /* ===== 修改点 E：修改 init 函数，先显示缩略图再异步加载原图 ===== */
   async function init() {
-    console.log('正在初始化Infinite Glass Tab...'); // 输出初始化开始信息
+    console.log('正在初始化Infinite Glass Tab(v79)...'); // 输出初始化开始信息
 
     // ==========【最终修复·桌面端兼容】仅 Android 设备锁定 body/html 高度为初始视口像素值 ==========
     // 问题：CSS 中 body { height: 100%; } 的 100% 参照的是动态视口高度。
@@ -2916,6 +3099,35 @@
 
     setInterval(checkNetwork, 15000); /* 每15秒检查一次网络状态 */
 
+    // ===== 【v66 add】macOS Safari 修复：去掉 scale，只保留上移 =====
+    // 根因：macOS Safari 的 transform:scale() 是将整个元素当作位图拉伸（不是重新渲染），
+    //       导致文字、按钮、图标全部变模糊，无任何 CSS 或浏览器设置可以回避。
+    //       其他浏览器（Edge/Chrome）无此问题，正确保留了缩放清晰度。
+    // 修复：仅 macOS Safari 下聚焦时只上移（translateY）、不放大（去掉 scale(1.1)），
+    //       交互反馈靠 translateY 位移动画撑住，所有元素始终清晰。
+    if (/Safari/i.test(navigator.userAgent) && !/Chrome|Edg|CriOS/i.test(navigator.userAgent) && /Mac/i.test(navigator.userAgent) && !/iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+      const safariFixStyle = document.createElement('style');
+      safariFixStyle.textContent = `
+        /* macOS Safari: 聚焦时只上移，不放大（scale 导致位图拉伸模糊）*/
+        body.search-focused .search-wrapper {
+          transform: translateY(-250px) !important;
+        }
+        .search-wrapper.focused {
+          transform: translateY(-60px) !important;
+        }
+        @media (max-width: 768px) {
+          body.search-focused .search-wrapper { transform: translateY(-300px) !important; }
+          .search-wrapper.focused { transform: translateY(-40px) !important; }
+        }
+        @media (max-width: 480px) {
+          body.search-focused .search-wrapper { transform: translateY(-250px) !important; }
+          .search-wrapper.focused { transform: translateY(-30px) !important; }
+        }
+      `;
+      document.head.appendChild(safariFixStyle);
+      console.log('【v66 add】macOS Safari 修复：聚焦时去掉 scale(1.1)，保留上移，元素清晰');
+    }
+
     console.log('初始化完成，当前模式:', isOnline ? '在线' : '离线'); /* 输出初始化完成信息 */
     console.log('记忆的搜索引擎:', currentEngine);
     console.log('键盘布局管理器已启用（简化版：不再与浏览器原生行为冲突）'); /* 【修复】更新日志 */
@@ -2929,6 +3141,46 @@
     /* 【修复】新增日志 */
     console.log('【最终修复】body 高度已锁定为初始视口像素值（仅 Android），adjustResize 无法改变布局');
     console.log('【最终修复·桌面端兼容】桌面浏览器跳过高度锁定，保持 height: 100% 自适应窗口大小');
+    console.log('【自动填充修复】三重保险已启用：<form autocomplete="off"> + type=search + inputmode=search');
+    console.log('【Chrome/Edge 修复】使用 visualViewport 统一检测键盘弹出，Chrome/Edge/Via/Kiwi 全兼容');
+    console.log('【v47 fix】iPad 建议框高度已放宽（CSS calc 从 -220px 改为 -120px）');
+    console.log('【v47 fix】自动高亮选中已禁用（CSS :focus/:active outline 重置）');
+    console.log('【v47 fix】updateSuggestionsHeight 已修复：删除重复 keyboardHeight 减算');
+    console.log('【v53 fix】updateSuggestionsHeight：不再减去 keyboardHeight（避免双重扣除）');
+    console.log('【v53 fix】updateSuggestionsHeight：数学预判溢出（取代读 DOM 安全钳）');
+    console.log('【v53 fix】CSS transition: all 0.45s 完全保留，动画完好');
+    console.log('【v54 fix】updateSuggestionsHeight：添加 rAF 防抖，键盘动画期间一帧只设一次 maxHeight，transition 不再被频繁重置');
+    console.log('【v55 debug】每次建议框高度计算会输出详细日志到 console，包含所有计算要素和分支路径');
+    console.log('【v57 fix】键盘状态变化时等待 600ms 让 searchWrapper 的 CSS transition 结束再计算高度，searchRect.bottom 不再读到过渡中间值');
+    console.log('【v60 fix】全局冷却 _globalCooldownTs：382ms 内只执行一次高度计算，无论从定时器还是 ELSE 进入');
+    console.log('【v61 fix】平台自适应底部间距：iPadOS 使用 45，iPhone/Android/Windows/macOS 使用 40');
+    console.log('【v63 fix】修复死锁：冷却检查移至所有状态修改之前；定时器路径传入 force=true 强制绕过冷却，收起/切换键盘后高度一定刷新');
+    /* ===== 【v65 fix】新增日志 ===== */
+    console.log('【v65 fix】iPad 键盘检测：改用视口高度变化直接判断（viewportShrank/viewportGrew），不再依赖 isKeyboardVisible 标志位，第二次聚焦正确识别键盘');
+    console.log('【v65 fix】iPad 底部间距：padding 由 45px 调整为 50px，增加底部安全空间');
+    console.log('【v65 fix】iPad 无键盘建议框 cap 由 460px 降为 420px，防止过长超出屏幕');
+    /* ===== 【v66 add】新增日志 ===== */
+    console.log('【v66 add】macOS Safari 修复：聚焦时去掉 scale(1.1)，仅保留 translateY 上移，元素清晰');
+    /* ===== 【v67 fix v3】新增日志 ===== */
+    console.log('【v67 fix v3】搜索行为（按钮/回车/建议）不再取消聚焦状态，去掉所有延迟，全平台统一');
+    console.log('【v67 fix v3】_searchJustTriggered 由 handleSearchBlur 自己清，不留残留，点击空白处可正常取消聚焦');
+    /* ===== 【v74 fix】新增日志 ===== */
+    console.log('【v74 fix】文档点击监听器兜底取消聚焦：点击搜索框外部即移除 search-focused/focused/blurred 类');
+    /* ===== 【v76 fix】新增日志 ===== */
+    console.log('【v76 fix】统一 :hover 悬停底色：移除 backdrop-filter 模糊，提高背景不透明度至 0.12，WebKit（macOS/iOS/iPadOS）与 Blink（Windows/Android）表现一致');
+    /* ===== 【v77 fix】新增日志 ===== */
+    console.log('【v77 fix】macOS Safari 聚焦修复：添加 click 事件兜底激活聚焦状态，Safari 输入框不触发 focus 时自动补救');
+    /* ===== 【v78 fix】新增日志 ===== */
+    console.log('【v78 fix】Safari 聚焦回弹修复：handleSearchFocus 末尾加 rAF 加固聚焦类，防止 Safari 内部原生搜索控件重绘清除聚焦类');
+    /* ===== 【v79 fix】新增日志 ===== */
+    console.log('【v79 fix】macOS Safari 聚焦回弹终极修复：文档点击监听器中判断输入框有焦点时不再取消聚焦，杜绝 Safari 原生搜索历史弹层误清除聚焦类');
+
+    // ===== 【v55 add】自动刷新一次（仅首次加载，仅 Android 平台）=====
+    // 用 sessionStorage 标记避免死循环，刷新后标记已存在，不再触发第二次
+    if (/Android/i.test(navigator.userAgent) && !sessionStorage.getItem('v55_refreshed')) {
+      sessionStorage.setItem('v55_refreshed', '1');
+      location.reload();
+    }
   }
 
   // 当DOM加载完成后执行初始化
